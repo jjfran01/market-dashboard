@@ -508,11 +508,11 @@
     </div>
 
     <p class="footer-note">
-      Investment-rate rule: above the 1-year average → 7.5%; below the 1-year average
-      while still above the 5-year average → 10%; at or below the 5-year average → 15%,
-      then +5 percentage points for every additional five-year threshold through the
-      50-year average. Long-term tiers are shown for manual review; only the normal
-      7.5% / 10% amount is automatic.
+      Investment-rate rule: above the 1-year average → 7.5%; at or below the
+      1-year average → 10%; at or below the 5-year average → 15%; at or below the
+      10-year average → 20%; then +5 percentage points for every additional five-year
+      threshold through the 50-year average. Long-term tiers are shown for manual review;
+      only the normal 7.5% / 10% amount is automatic.
     </p>
   </section>
 </div>
@@ -660,24 +660,29 @@
     const paycheck = Number($("paycheck").value) || 0;
     const avg1 = currentAverages[1];
 
-    let autoPercent = 10;
-    if (Number.isFinite(avg1) && currentPrice > avg1) {
-      autoPercent = 7.5;
-    }
+    // Base band:
+    // above 1-year average = 7.5%
+    // at/below 1-year average = 10%
+    let autoPercent =
+      Number.isFinite(avg1) && currentPrice > avg1 ? 7.5 : 10;
 
     let targetPercent = autoPercent;
     let deepestTrigger = null;
 
-    YEARS.filter(y => y >= 5).forEach(year => {
+    // Long-term tiers:
+    // 5y = 15%, 10y = 20%, ... 50y = 60%.
+    // Check deepest thresholds first so the applicable rate is unambiguous.
+    const longYears = YEARS.filter(y => y >= 5).sort((a, b) => b - a);
+
+    for (const year of longYears) {
       const avg = currentAverages[year];
+
       if (Number.isFinite(avg) && currentPrice <= avg) {
-        const tierTarget = 10 + year;
-        if (tierTarget > targetPercent) {
-          targetPercent = tierTarget;
-          deepestTrigger = year;
-        }
+        targetPercent = 10 + year;
+        deepestTrigger = year;
+        break;
       }
-    });
+    }
 
     const autoAmount = paycheck * autoPercent / 100;
     const targetAmount = paycheck * targetPercent / 100;
@@ -724,7 +729,7 @@
       currentPrice > avg1
         ? `The market is above its 1-year average. The investment rate is 7.5% of this paycheck.`
         : (Number.isFinite(avg5) && currentPrice > avg5)
-          ? `The market is below its 1-year average but above its 5-year average. The investment rate is 10% of this paycheck.`
+          ? `The market is at or below its 1-year average but above its 5-year average. The investment rate is 10% of this paycheck.`
           : `The market is at or below its 5-year average. A long-term investment-rate tier is active for manual review.`;
 
     $("targetValue").textContent = `${d.targetPercent}% / ${money(d.targetAmount)}`;
@@ -763,7 +768,7 @@
           <td>${year}-year</td>
           <td>Not enough history</td>
           <td>--</td>
-          <td>${year === 1 ? "7.5% / 10%" : `${10 + year}%`}</td>
+          <td>${year === 1 ? "10%" : `${10 + year}%`}</td>
           <td><span class="pill">Unavailable</span></td>
         `;
         body.appendChild(tr);
@@ -773,7 +778,7 @@
       const diff = (currentPrice / avg - 1) * 100;
       const hit = currentPrice <= avg;
       const target = year === 1
-        ? (currentPrice > avg ? "7.5%" : "10%")
+        ? "10%"
         : `${10 + year}%`;
 
       if (year >= 5 && hit) tr.className = "triggered";

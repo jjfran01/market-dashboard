@@ -377,15 +377,69 @@
 
     details { margin-top: 12px; }
     summary { cursor: pointer; font-weight: 700; }
+
+    .header-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+      flex-wrap: wrap;
+    }
+
+    .version-badge {
+      display: inline-flex;
+      align-items: center;
+      min-height: 30px;
+      padding: 5px 10px;
+      border-radius: 999px;
+      background: #e8efff;
+      color: #1d4ed8;
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: .04em;
+      white-space: nowrap;
+    }
+
+    .chart-wrap.context-chart {
+      height: 470px;
+    }
+
+    .chart-wrap.buffett-chart {
+      height: 390px;
+    }
+
+    @media (max-width: 700px) {
+      .chart-wrap.context-chart { height: 390px; }
+      .chart-wrap.buffett-chart { height: 340px; }
+    }
+
+    .explain-box {
+      margin-top: 12px;
+      padding: 12px 14px;
+      border-radius: 12px;
+      background: #f8fafc;
+      border: 1px solid var(--border);
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.5;
+    }
+
+    .context-table td:nth-child(2),
+    .context-table td:nth-child(3) {
+      font-variant-numeric: tabular-nums;
+    }
   </style>
 </head>
 
 <body>
 <div class="container">
   <header>
-    <h1>US Market Conditions</h1>
+    <div class="header-row">
+      <h1>US Market Conditions</h1>
+      <span class="version-badge">Version 7</span>
+    </div>
     <p class="subtitle">
-      Wilshire 5000 total-market proxy · long-term moving-average monitor
+      Market trend · purchasing power · broad-market valuation
     </p>
   </header>
 
@@ -425,10 +479,10 @@
     <details>
       <summary>How the page gets its data</summary>
       <p>
-        GitHub Actions updates a local <strong>market-data.json</strong> file using
-        archived Wilshire 5000 history plus a current WFIVX continuation from
-        Alpha Vantage. This webpage reads that local file directly, so Safari no
-        longer depends on FRED/Yahoo browser relays.
+        GitHub Actions maintains <strong>market-data.json</strong> for the Wilshire
+        trend monitor and <strong>market-context.json</strong> for purchasing-power
+        comparisons and the Buffett Indicator. The page reads those published files
+        directly, so Safari does not need to contact market-data providers itself.
       </p>
     </details>
   </section>
@@ -515,6 +569,98 @@
       only the normal 7.5% / 10% amount is automatic.
     </p>
   </section>
+
+  <section class="card">
+    <h2 style="margin-bottom:4px;">Purchasing-power normalization</h2>
+    <p class="subtitle" style="margin:0;">
+      Each line divides the market level by another measure of purchasing power,
+      then indexes the result to 100 at one common starting month.
+    </p>
+
+    <div id="contextStatus" class="status">
+      Loading purchasing-power and valuation context…
+    </div>
+
+    <div class="explain-box" id="normalizationExplanation">
+      A reading above 100 means stocks have gained value relative to that comparator
+      since the common starting point. Below 100 means the comparator has gained
+      relative value versus stocks.
+    </div>
+
+    <div id="normalizationChartWrap" class="chart-wrap context-chart">
+      <svg id="normalizationChart" viewBox="0 0 1000 470" preserveAspectRatio="none"></svg>
+      <div id="normalizationTooltip" class="tooltip"></div>
+    </div>
+
+    <div id="normalizationLegend" class="legend"></div>
+
+    <div class="table-wrap" style="margin-top:12px;">
+      <table class="context-table">
+        <thead>
+          <tr>
+            <th>Comparator</th>
+            <th>Normalized</th>
+            <th>Vs. baseline</th>
+            <th>Latest comparator data</th>
+          </tr>
+        </thead>
+        <tbody id="normalizationBody"></tbody>
+      </table>
+    </div>
+
+    <p class="footer-note" id="normalizationNote">
+      Waiting for market-context data.
+    </p>
+  </section>
+
+  <section class="card">
+    <h2 style="margin-bottom:4px;">Buffett Indicator — Public Equity Market Value / GNP</h2>
+    <p class="subtitle" style="margin:0;">
+      A broad valuation lens comparing the value of publicly traded U.S. corporate
+      equities with Gross National Product. The official history is quarterly; the
+      current estimate is clearly labeled as a nowcast.
+    </p>
+
+    <div class="grid-4" style="margin-top:14px;">
+      <div class="metric">
+        <div class="metric-label">Latest official</div>
+        <div class="metric-value" id="buffettOfficial">--</div>
+        <div class="metric-sub" id="buffettOfficialSub">Quarterly ratio</div>
+      </div>
+
+      <div class="metric">
+        <div class="metric-label">Estimated current</div>
+        <div class="metric-value" id="buffettNowcast">--</div>
+        <div class="metric-sub" id="buffettNowcastSub">Nowcast</div>
+      </div>
+
+      <div class="metric">
+        <div class="metric-label">Historical median</div>
+        <div class="metric-value" id="buffettMedian">--</div>
+        <div class="metric-sub" id="buffettMedianSub">Since 1976</div>
+      </div>
+
+      <div class="metric">
+        <div class="metric-label">Historical percentile</div>
+        <div class="metric-value" id="buffettPercentile">--</div>
+        <div class="metric-sub" id="buffettPercentileSub">Estimated current reading</div>
+      </div>
+    </div>
+
+    <div id="buffettChartWrap" class="chart-wrap buffett-chart">
+      <svg id="buffettChart" viewBox="0 0 1000 390" preserveAspectRatio="none"></svg>
+    </div>
+
+    <div class="legend">
+      <div class="legend-item"><span class="swatch" style="background:#2563eb"></span><span>Official quarterly ratio</span></div>
+      <div class="legend-item"><span class="swatch" style="background:#b45309"></span><span>Estimated current ratio</span></div>
+      <div class="legend-item"><span class="swatch" style="background:#667085"></span><span>Historical median</span></div>
+    </div>
+
+    <div class="explain-box" id="buffettNote">
+      Waiting for Buffett Indicator data.
+    </div>
+  </section>
 </div>
 
 <script>
@@ -532,6 +678,9 @@
   let marketTimestamp = "";
   let moving = {};
   let currentAverages = {};
+  let marketContext = null;
+
+  const CONTEXT_COLORS = ["#2563eb", "#b45309", "#7c3aed", "#087f5b", "#be123c"];
 
   const $ = id => document.getElementById(id);
 
@@ -1048,6 +1197,606 @@
     });
   }
 
+
+  function cacheContextData(payload) {
+    try {
+      localStorage.setItem("marketContextCacheV1", JSON.stringify({
+        savedAt: new Date().toISOString(),
+        payload
+      }));
+    } catch {}
+  }
+
+  function getCachedContextData() {
+    try {
+      const raw = localStorage.getItem("marketContextCacheV1");
+      return raw ? JSON.parse(raw) : null;
+    } catch {
+      return null;
+    }
+  }
+
+  function setContextStatus(message, kind = "") {
+    const el = $("contextStatus");
+    if (!el) return;
+    el.textContent = message;
+    el.className = "status" + (kind ? ` ${kind}` : "");
+  }
+
+  function setContextLoading(message) {
+    const el = $("contextStatus");
+    if (!el) return;
+    el.className = "status";
+    el.innerHTML =
+      `<span class="status-loading">` +
+      `<span class="status-spinner" aria-hidden="true"></span>` +
+      `<span>${message}</span>` +
+      `</span>`;
+  }
+
+  function rangeStartTs(latestTs) {
+    const range = $("chartRange").value;
+    if (range === "all") return -Infinity;
+    const years = Number(range);
+    return latestTs - years * 365.2425 * 24 * 60 * 60 * 1000;
+  }
+
+  function normalizeContextData(raw) {
+    if (!raw || !raw.normalization || !raw.buffett) {
+      throw new Error("market-context.json is missing required sections.");
+    }
+
+    const series = Array.isArray(raw.normalization.series)
+      ? raw.normalization.series.map((s, idx) => ({
+          ...s,
+          color: CONTEXT_COLORS[idx % CONTEXT_COLORS.length],
+          rows: (s.rows || [])
+            .map(r => ({
+              date: String(r.date || ""),
+              ts: Number(r.ts),
+              value: Number(r.value)
+            }))
+            .filter(r =>
+              Number.isFinite(r.ts) &&
+              Number.isFinite(r.value) &&
+              /^\d{4}-\d{2}-\d{2}$/.test(r.date)
+            )
+            .sort((a, b) => a.ts - b.ts)
+        }))
+      : [];
+
+    if (!series.length) {
+      throw new Error("No purchasing-power series were published.");
+    }
+
+    const officialRows = (raw.buffett.officialRows || [])
+      .map(r => ({
+        ...r,
+        ts: Number(r.ts),
+        ratio: Number(r.ratio)
+      }))
+      .filter(r => Number.isFinite(r.ts) && Number.isFinite(r.ratio))
+      .sort((a, b) => a.ts - b.ts);
+
+    if (!officialRows.length) {
+      throw new Error("No Buffett Indicator history was published.");
+    }
+
+    return {
+      ...raw,
+      normalization: {
+        ...raw.normalization,
+        series
+      },
+      buffett: {
+        ...raw.buffett,
+        officialRows
+      }
+    };
+  }
+
+  function applyContextData(data) {
+    marketContext = data;
+    renderContext();
+  }
+
+  function renderContext() {
+    if (!marketContext) return;
+    renderNormalizationTable();
+    renderNormalizationChart();
+    renderBuffettIndicator();
+  }
+
+  function renderNormalizationTable() {
+    const body = $("normalizationBody");
+    if (!body || !marketContext) return;
+
+    body.innerHTML = "";
+
+    marketContext.normalization.series.forEach(series => {
+      const latest = series.rows[series.rows.length - 1];
+      const delta = latest ? latest.value - 100 : NaN;
+
+      const tr = document.createElement("tr");
+      tr.innerHTML = `
+        <td>${series.shortLabel || series.label}</td>
+        <td>${latest ? indexNumber(latest.value) : "--"}</td>
+        <td>${Number.isFinite(delta) ? `${delta >= 0 ? "+" : ""}${delta.toFixed(1)}%` : "--"}</td>
+        <td>${series.latestComparatorDate || "--"}</td>
+      `;
+      body.appendChild(tr);
+    });
+
+    const base = marketContext.normalization.baseMonth || "--";
+    $("normalizationNote").textContent =
+      `Common baseline: ${base} = 100 for every line. ` +
+      `This is a relative-value comparison, not a claim that any one comparator is a perfect inflation hedge.`;
+  }
+
+  function renderNormalizationChart() {
+    if (!marketContext) return;
+
+    const svg = $("normalizationChart");
+    const legend = $("normalizationLegend");
+    const tooltip = $("normalizationTooltip");
+    if (!svg || !legend || !tooltip) return;
+
+    svg.innerHTML = "";
+    legend.innerHTML = "";
+
+    const width = 1000;
+    const height = 470;
+    const pad = { left: 70, right: 22, top: 25, bottom: 44 };
+    const plotW = width - pad.left - pad.right;
+    const plotH = height - pad.top - pad.bottom;
+
+    const allSeries = marketContext.normalization.series;
+    const latestTs = Math.max(
+      ...allSeries.map(s => s.rows.length ? s.rows[s.rows.length - 1].ts : 0)
+    );
+    const startTs = rangeStartTs(latestTs);
+
+    const visible = allSeries.map(s => ({
+      ...s,
+      visibleRows: s.rows.filter(r => r.ts >= startTs)
+    })).filter(s => s.visibleRows.length);
+
+    if (!visible.length) return;
+
+    let firstTs = Infinity;
+    let lastTs = -Infinity;
+    let minY = 100;
+    let maxY = 100;
+
+    visible.forEach(s => {
+      firstTs = Math.min(firstTs, s.visibleRows[0].ts);
+      lastTs = Math.max(lastTs, s.visibleRows[s.visibleRows.length - 1].ts);
+      s.visibleRows.forEach(r => {
+        minY = Math.min(minY, r.value);
+        maxY = Math.max(maxY, r.value);
+      });
+    });
+
+    let spread = maxY - minY;
+    if (!Number.isFinite(spread) || spread <= 0) spread = 1;
+    minY -= spread * 0.06;
+    maxY += spread * 0.06;
+
+    const xFor = ts =>
+      pad.left + ((ts - firstTs) / Math.max(1, lastTs - firstTs)) * plotW;
+    const yFor = value =>
+      pad.top + (1 - (value - minY) / (maxY - minY)) * plotH;
+
+    svg.appendChild(svgEl("rect", {
+      x: 0, y: 0, width, height, fill: "#ffffff"
+    }));
+
+    for (let t = 0; t <= 5; t++) {
+      const frac = t / 5;
+      const y = pad.top + frac * plotH;
+      const value = maxY - frac * (maxY - minY);
+
+      svg.appendChild(svgEl("line", {
+        x1: pad.left, x2: width - pad.right,
+        y1: y, y2: y,
+        stroke: "#e8ecf1", "stroke-width": 1
+      }));
+
+      const label = svgEl("text", {
+        x: pad.left - 10,
+        y: y + 4,
+        "text-anchor": "end",
+        fill: "#667085",
+        "font-size": 12
+      });
+      label.textContent = indexNumber(value);
+      svg.appendChild(label);
+    }
+
+    if (100 >= minY && 100 <= maxY) {
+      const y100 = yFor(100);
+      svg.appendChild(svgEl("line", {
+        x1: pad.left, x2: width - pad.right,
+        y1: y100, y2: y100,
+        stroke: "#98a2b3", "stroke-width": 1.2,
+        "stroke-dasharray": "6 5"
+      }));
+    }
+
+    for (let t = 0; t <= 7; t++) {
+      const frac = t / 7;
+      const ts = firstTs + frac * (lastTs - firstTs);
+      const x = pad.left + frac * plotW;
+      const d = new Date(ts);
+
+      const label = svgEl("text", {
+        x,
+        y: height - 16,
+        "text-anchor": t === 0 ? "start" : (t === 7 ? "end" : "middle"),
+        fill: "#667085",
+        "font-size": 12
+      });
+      label.textContent = String(d.getUTCFullYear());
+      svg.appendChild(label);
+    }
+
+    visible.forEach(series => {
+      let path = "";
+      let penDown = false;
+      const step = Math.max(1, Math.ceil(series.visibleRows.length / 700));
+
+      for (let i = 0; i < series.visibleRows.length; i += step) {
+        const row = series.visibleRows[i];
+        const x = xFor(row.ts);
+        const y = yFor(row.value);
+        path += `${penDown ? "L" : "M"}${x.toFixed(2)},${y.toFixed(2)} `;
+        penDown = true;
+      }
+
+      const lastRow = series.visibleRows[series.visibleRows.length - 1];
+      if (lastRow && series.visibleRows.length > 1) {
+        const x = xFor(lastRow.ts);
+        const y = yFor(lastRow.value);
+        path += `L${x.toFixed(2)},${y.toFixed(2)} `;
+      }
+
+      svg.appendChild(svgEl("path", {
+        d: path,
+        fill: "none",
+        stroke: series.color,
+        "stroke-width": 2,
+        "vector-effect": "non-scaling-stroke",
+        "stroke-linejoin": "round",
+        "stroke-linecap": "round"
+      }));
+
+      const item = document.createElement("div");
+      item.className = "legend-item";
+      item.innerHTML =
+        `<span class="swatch" style="background:${series.color}"></span>` +
+        `<span>${series.shortLabel || series.label}</span>`;
+      legend.appendChild(item);
+    });
+
+    const hoverLine = svgEl("line", {
+      x1: 0, x2: 0,
+      y1: pad.top, y2: height - pad.bottom,
+      stroke: "#98a2b3",
+      "stroke-width": 1,
+      "stroke-dasharray": "4 4",
+      visibility: "hidden",
+      "vector-effect": "non-scaling-stroke"
+    });
+    svg.appendChild(hoverLine);
+
+    function nearestRow(rows, targetTs) {
+      let best = rows[0];
+      let bestDist = Math.abs(best.ts - targetTs);
+      for (const row of rows) {
+        const dist = Math.abs(row.ts - targetTs);
+        if (dist < bestDist) {
+          best = row;
+          bestDist = dist;
+        }
+      }
+      return best;
+    }
+
+    function onPointer(evt) {
+      const rect = svg.getBoundingClientRect();
+      const localX = ((evt.clientX - rect.left) / rect.width) * width;
+
+      if (localX < pad.left || localX > width - pad.right) {
+        tooltip.style.display = "none";
+        hoverLine.setAttribute("visibility", "hidden");
+        return;
+      }
+
+      const frac = (localX - pad.left) / plotW;
+      const targetTs = firstTs + frac * (lastTs - firstTs);
+      const anchorRow = nearestRow(visible[0].visibleRows, targetTs);
+      const x = xFor(anchorRow.ts);
+
+      hoverLine.setAttribute("x1", x);
+      hoverLine.setAttribute("x2", x);
+      hoverLine.setAttribute("visibility", "visible");
+
+      const lines = [`<strong>${anchorRow.date}</strong>`];
+      visible.forEach(series => {
+        const row = nearestRow(series.visibleRows, anchorRow.ts);
+        lines.push(
+          `${series.shortLabel || series.label}: ${indexNumber(row.value)}`
+        );
+      });
+
+      tooltip.innerHTML = lines.join("<br>");
+      tooltip.style.display = "block";
+
+      const wrap = $("normalizationChartWrap").getBoundingClientRect();
+      let left = evt.clientX - wrap.left + 14;
+      let top = evt.clientY - wrap.top + 14;
+
+      if (left + 250 > wrap.width) left -= 264;
+      if (top + 210 > wrap.height) top -= 220;
+
+      tooltip.style.left = `${Math.max(8, left)}px`;
+      tooltip.style.top = `${Math.max(8, top)}px`;
+    }
+
+    svg.addEventListener("pointermove", onPointer);
+    svg.addEventListener("pointerdown", onPointer);
+    svg.addEventListener("pointerleave", () => {
+      tooltip.style.display = "none";
+      hoverLine.setAttribute("visibility", "hidden");
+    });
+  }
+
+  function renderBuffettIndicator() {
+    if (!marketContext) return;
+
+    const buffett = marketContext.buffett;
+    const official = buffett.latestOfficial || {};
+    const nowcast = buffett.nowcast || {};
+    const median = Number(buffett.historicalMedian);
+
+    $("buffettOfficial").textContent =
+      Number.isFinite(Number(official.ratio)) ? pct(Number(official.ratio)) : "--";
+    $("buffettOfficialSub").textContent =
+      official.quarter ? `${official.quarter} official reading` : "Quarterly ratio";
+
+    $("buffettNowcast").textContent =
+      Number.isFinite(Number(nowcast.ratio)) ? pct(Number(nowcast.ratio)) : "--";
+    $("buffettNowcastSub").textContent =
+      nowcast.date ? `Estimated as of ${nowcast.date}` : "Nowcast";
+
+    $("buffettMedian").textContent =
+      Number.isFinite(median) ? pct(median) : "--";
+    $("buffettMedianSub").textContent = "Median official ratio since 1976";
+
+    const percentile = Number(nowcast.historicalPercentile);
+    $("buffettPercentile").textContent =
+      Number.isFinite(percentile) ? `${percentile.toFixed(0)}th` : "--";
+
+    const distance = Number(nowcast.distanceFromMedianPct);
+    $("buffettPercentileSub").textContent =
+      Number.isFinite(distance)
+        ? `${distance >= 0 ? "+" : ""}${distance.toFixed(1)}% versus historical median`
+        : "Estimated current reading";
+
+    $("buffettNote").innerHTML =
+      `<strong>Nowcast method:</strong> ${nowcast.method || "Not available"} ` +
+      `The official series remains the historical anchor; the estimate is not an official Federal Reserve or BEA statistic.`;
+
+    renderBuffettChart();
+  }
+
+  function renderBuffettChart() {
+    const svg = $("buffettChart");
+    if (!svg || !marketContext) return;
+
+    svg.innerHTML = "";
+
+    const rows = marketContext.buffett.officialRows || [];
+    const nowcast = marketContext.buffett.nowcast || {};
+    const median = Number(marketContext.buffett.historicalMedian);
+
+    if (!rows.length) return;
+
+    const latestTs = Math.max(
+      rows[rows.length - 1].ts,
+      Number(nowcast.ts) || 0
+    );
+    const startTs = rangeStartTs(latestTs);
+    const visible = rows.filter(r => r.ts >= startTs);
+
+    if (!visible.length) return;
+
+    const width = 1000;
+    const height = 390;
+    const pad = { left: 70, right: 22, top: 24, bottom: 42 };
+    const plotW = width - pad.left - pad.right;
+    const plotH = height - pad.top - pad.bottom;
+
+    const firstTs = visible[0].ts;
+    const lastTs = Math.max(
+      visible[visible.length - 1].ts,
+      Number(nowcast.ts) || visible[visible.length - 1].ts
+    );
+
+    let minY = Math.min(...visible.map(r => r.ratio));
+    let maxY = Math.max(...visible.map(r => r.ratio));
+
+    if (Number.isFinite(median)) {
+      minY = Math.min(minY, median);
+      maxY = Math.max(maxY, median);
+    }
+
+    if (Number.isFinite(Number(nowcast.ratio))) {
+      minY = Math.min(minY, Number(nowcast.ratio));
+      maxY = Math.max(maxY, Number(nowcast.ratio));
+    }
+
+    let spread = maxY - minY;
+    if (!Number.isFinite(spread) || spread <= 0) spread = 1;
+    minY = Math.max(0, minY - spread * 0.08);
+    maxY += spread * 0.08;
+
+    const xFor = ts =>
+      pad.left + ((ts - firstTs) / Math.max(1, lastTs - firstTs)) * plotW;
+    const yFor = value =>
+      pad.top + (1 - (value - minY) / (maxY - minY)) * plotH;
+
+    svg.appendChild(svgEl("rect", {
+      x: 0, y: 0, width, height, fill: "#ffffff"
+    }));
+
+    for (let t = 0; t <= 5; t++) {
+      const frac = t / 5;
+      const y = pad.top + frac * plotH;
+      const value = maxY - frac * (maxY - minY);
+
+      svg.appendChild(svgEl("line", {
+        x1: pad.left, x2: width - pad.right,
+        y1: y, y2: y,
+        stroke: "#e8ecf1", "stroke-width": 1
+      }));
+
+      const label = svgEl("text", {
+        x: pad.left - 10,
+        y: y + 4,
+        "text-anchor": "end",
+        fill: "#667085",
+        "font-size": 12
+      });
+      label.textContent = `${value.toFixed(0)}%`;
+      svg.appendChild(label);
+    }
+
+    for (let t = 0; t <= 7; t++) {
+      const frac = t / 7;
+      const ts = firstTs + frac * (lastTs - firstTs);
+      const x = pad.left + frac * plotW;
+      const d = new Date(ts);
+
+      const label = svgEl("text", {
+        x,
+        y: height - 15,
+        "text-anchor": t === 0 ? "start" : (t === 7 ? "end" : "middle"),
+        fill: "#667085",
+        "font-size": 12
+      });
+      label.textContent = String(d.getUTCFullYear());
+      svg.appendChild(label);
+    }
+
+    if (Number.isFinite(median)) {
+      const y = yFor(median);
+      svg.appendChild(svgEl("line", {
+        x1: pad.left, x2: width - pad.right,
+        y1: y, y2: y,
+        stroke: "#667085",
+        "stroke-width": 1.4,
+        "stroke-dasharray": "6 5",
+        "vector-effect": "non-scaling-stroke"
+      }));
+    }
+
+    let path = "";
+    visible.forEach((row, idx) => {
+      const x = xFor(row.ts);
+      const y = yFor(row.ratio);
+      path += `${idx ? "L" : "M"}${x.toFixed(2)},${y.toFixed(2)} `;
+    });
+
+    svg.appendChild(svgEl("path", {
+      d: path,
+      fill: "none",
+      stroke: "#2563eb",
+      "stroke-width": 2.2,
+      "vector-effect": "non-scaling-stroke",
+      "stroke-linejoin": "round",
+      "stroke-linecap": "round"
+    }));
+
+    const latestOfficial = visible[visible.length - 1];
+
+    if (
+      Number.isFinite(Number(nowcast.ratio)) &&
+      Number.isFinite(Number(nowcast.ts)) &&
+      Number(nowcast.ts) >= firstTs
+    ) {
+      const x1 = xFor(latestOfficial.ts);
+      const y1 = yFor(latestOfficial.ratio);
+      const x2 = xFor(Number(nowcast.ts));
+      const y2 = yFor(Number(nowcast.ratio));
+
+      svg.appendChild(svgEl("line", {
+        x1, y1, x2, y2,
+        stroke: "#b45309",
+        "stroke-width": 1.8,
+        "stroke-dasharray": "5 4",
+        "vector-effect": "non-scaling-stroke"
+      }));
+
+      svg.appendChild(svgEl("circle", {
+        cx: x2,
+        cy: y2,
+        r: 5,
+        fill: "#b45309",
+        "vector-effect": "non-scaling-stroke"
+      }));
+    }
+  }
+
+  async function refreshContext() {
+    setContextLoading("Loading purchasing-power and Buffett context…");
+
+    try {
+      const response = await fetch(`market-context.json?v=${Date.now()}`, {
+        cache: "no-store"
+      });
+
+      if (!response.ok) {
+        throw new Error(`market-context.json returned HTTP ${response.status}.`);
+      }
+
+      const raw = await response.json();
+      const data = normalizeContextData(raw);
+
+      applyContextData(data);
+      cacheContextData(data);
+
+      const base = data.normalization.baseMonth || "--";
+      setContextStatus(
+        `Context updated successfully. Common purchasing-power baseline: ${base} = 100.`
+      );
+    } catch (err) {
+      const cached = getCachedContextData();
+
+      if (cached?.payload?.normalization?.series?.length) {
+        try {
+          const data = normalizeContextData(cached.payload);
+          applyContextData(data);
+
+          const saved = cached.savedAt
+            ? new Date(cached.savedAt).toLocaleString()
+            : "an earlier session";
+
+          setContextStatus(
+            `Context refresh failed, so the page is showing its last saved context from ${saved}. ${err.message}`,
+            "warn"
+          );
+          return;
+        } catch {}
+      }
+
+      setContextStatus(
+        `Purchasing-power / Buffett context is not available yet. ${err.message}`,
+        "warn"
+      );
+    }
+  }
+
   function normalizePublishedData(raw) {
     if (!raw || !Array.isArray(raw.rows)) {
       throw new Error("market-data.json did not contain a rows array.");
@@ -1106,6 +1855,8 @@
     setRefreshButtonLoading(true);
     setLoadingStatus("Loading the latest published market data…");
 
+    const contextPromise = refreshContext();
+
     try {
       const response = await fetch(`market-data.json?v=${Date.now()}`, {
         cache: "no-store"
@@ -1149,6 +1900,7 @@
         setStatus(`Could not load market data. ${err.message}`, "error");
       }
     } finally {
+      await contextPromise;
       setRefreshButtonLoading(false);
     }
   }
@@ -1163,6 +1915,7 @@
   $("chartRange").addEventListener("change", () => {
     saveSettings();
     if (marketRows.length) renderChart();
+    if (marketContext) renderContext();
   });
 
   loadSettings();
@@ -1172,6 +1925,16 @@
     try {
       applyData(cached.payload);
       setStatus("Showing the last saved dataset while the latest published data loads.");
+    } catch {}
+  }
+
+  const cachedContext = getCachedContextData();
+  if (cachedContext?.payload?.normalization?.series?.length) {
+    try {
+      applyContextData(normalizeContextData(cachedContext.payload));
+      setContextStatus(
+        "Showing the last saved purchasing-power / valuation context while the latest data loads."
+      );
     } catch {}
   }
 

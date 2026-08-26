@@ -1,0 +1,379 @@
+name: Update market data v3
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "30 12 * * 1-5"
+    - cron: "30 22 * * 1-5"
+
+permissions:
+  contents: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build local history and market data
+        shell: bash
+        run: |
+          python - <<'PY'
+          import csv
+          import io
+          import json
+          import math
+          import statistics
+          import time
+          import urllib.parse
+          import urllib.request
+          from collections import OrderedDict
+          from datetime import datetime, timezone
+          from pathlib import Path
+
+          HISTORY_FILE = Path("wilshire-history.csv")
+          OUTPUT_FILE = Path("market-data.json")
+
+          # Public static copy of archived FRED/Wilshire data.
+          # Pinned to a specific GitHub commit so the seed cannot change underneath us.
+          HISTORY_SEED = (
+              "https://raw.githubusercontent.com/"
+              "boggs2louky/EAP/"
+              "13c262c3e0bed1dbf9bd8620010199ce2636e40b/"
+              "data/WILL5000PRFC.csv"
+          )
+
+          SYMBOL = "^W5000"
+          YAHOO_BASES = (
+              "https://query1.finance.yahoo.com",
+              "https://query2.finance.yahoo.com",
+          )
+
+          UA = (
+              "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+              "AppleWebKit/537.36 (KHTML, like Gecko) "
+              "Chrome/124.0 Safari/537.36"
+          )
+
+          def download(url, attempts=3, timeout=30):
+              last = None
+              for attempt in range(1, attempts + 1):
+                  try:
+                      print(f"Download attempt {attempt}/{attempts}: {url}")
+                      req = urllib.request.Request(
+                          url,
+                          headers={
+                              "User-Agent": UA,
+                              "Accept": "application/json,text/csv,text/plain,*/*",
+                          },
+                      )
+                      with urllib.request.urlopen(req, timeout=timeout) as r:
+                          data = r.read()
+
+                      if not data:
+                          raise RuntimeError("empty response")
+
+                      print(f"Downloaded {len(data):,} bytes")
+                      return data
+
+                  except Exception as exc:
+                      last = exc
+                      print(f"Attempt {attempt} failed: {type(exc).__name__}: {exc}")
+                      if attempt < attempts:
+                          time.sleep(2 ** attempt)
+
+              raise RuntimeError(f"Download failed: {last}")
+
+          def month_key(date_text):
+              return date_text[:7]
+
+          def to_month_end(rows):
+              by_month = OrderedDict()
+              for row in sorted(rows, key=lambda r: r["date"]):
+                  by_month[month_key(row["date"])] = row
+              return list(by_month.values())
+
+          def parse_seed_csv(text):
+              reader = csv.reader(io.StringIO(text))
+              rows = []
+
+              first = True
+              for parts in reader:
+                  if first:
+                      first = False
+                      continue
+
+                  if len(parts) < 2:
+                      continue
+
+                  date_text = parts[0].strip()
+                  raw = parts[1].strip()
+
+                  try:
+                      value = float(raw)
+                      dt = datetime.strptime(date_text[:10], "%Y-%m-%d").replace(
+                          tzinfo=timezone.utc
+                      )
+                  except Exception:
+                      continue
+
+                  if math.isfinite(value):
+                      rows.append(
+                          {
+                              "date": dt.strftime("%Y-%m-%d"),
+                              "ts": int(dt.timestamp() * 1000),
+                              "value": value,
+                          }
+                      )
+
+              return to_month_end(rows)
+
+          def save_compact_history(rows):
+              with HISTORY_FILE.open("w", newline="", encoding="utf-8") as f:
+                  writer = csv.writer(f)
+                  writer.writerow(["date", "value"])
+                  for row in rows:
+                      writer.writerow([row["date"], f'{row["value"]:.8f}'])
+
+          def load_compact_history():
+              rows = []
+              with HISTORY_FILE.open("r", newline="", encoding="utf-8") as f:
+                  reader = csv.DictReader(f)
+                  for row in reader:
+                      try:
+                          dt = datetime.strptime(row["date"], "%Y-%m-%d").replace(
+                              tzinfo=timezone.utc
+                          )
+                          value = float(row["value"])
+                      except Exception:
+                          continue
+
+                      if math.isfinite(value):
+                          rows.append(
+                              {
+                                  "date": dt.strftime("%Y-%m-%d"),
+                                  "ts": int(dt.timestamp() * 1000),
+                                  "value": value,
+                              }
+                          )
+              return to_month_end(rows)
+
+          # Seed once, then use our own local copy forever after.
+          if HISTORY_FILE.exists():
+              print("Using local wilshire-history.csv")
+              history_rows = load_compact_history()
+          else:
+              print("Local history not found; seeding it from pinned GitHub data.")
+              seed_text = download(HISTORY_SEED, attempts=3, timeout=30).decode(
+                  "utf-8-sig", "replace"
+              )
+              history_rows = parse_seed_csv(seed_text)
+              save_compact_history(history_rows)
+              print("Saved compact local history.")
+
+          print(
+              f"Historical monthly observations: {len(history_rows)} "
+              f"({history_rows[0]['date']} through {history_rows[-1]['date']})"
+          )
+
+          if len(history_rows) < 500:
+              raise RuntimeError(
+                  f"Historical seed is unexpectedly short: {len(history_rows)} months"
+              )
+
+          # Fetch the much smaller current/monthly series from Yahoo.
+          symbol = urllib.parse.quote(SYMBOL, safe="")
+          yahoo_payload = None
+          errors = []
+
+          for base in YAHOO_BASES:
+              url = (
+                  f"{base}/v8/finance/chart/{symbol}"
+                  "?range=max&interval=1mo"
+                  "&includePrePost=false"
+                  "&events=div%2Csplits"
+              )
+
+              try:
+                  candidate = json.loads(
+                      download(url, attempts=2, timeout=30).decode(
+                          "utf-8", "replace"
+                      )
+                  )
+                  if candidate.get("chart", {}).get("result"):
+                      yahoo_payload = candidate
+                      break
+                  errors.append(str(candidate.get("chart", {}).get("error")))
+              except Exception as exc:
+                  errors.append(str(exc))
+
+          if yahoo_payload is None:
+              raise RuntimeError("Yahoo Finance failed: " + " | ".join(errors))
+
+          result = yahoo_payload["chart"]["result"][0]
+          timestamps = result.get("timestamp") or []
+          closes = (
+              ((result.get("indicators") or {}).get("quote") or [{}])[0]
+              .get("close")
+              or []
+          )
+
+          yahoo_rows = []
+          for ts, close in zip(timestamps, closes):
+              try:
+                  value = float(close)
+                  dt = datetime.fromtimestamp(int(ts), tz=timezone.utc)
+              except Exception:
+                  continue
+
+              if math.isfinite(value):
+                  yahoo_rows.append(
+                      {
+                          "date": dt.strftime("%Y-%m-%d"),
+                          "ts": int(dt.timestamp() * 1000),
+                          "value": value,
+                      }
+                  )
+
+          yahoo_rows = to_month_end(yahoo_rows)
+
+          print(
+              f"Yahoo monthly observations: {len(yahoo_rows)} "
+              f"({yahoo_rows[0]['date']} through {yahoo_rows[-1]['date']})"
+          )
+
+          if len(yahoo_rows) < 24:
+              raise RuntimeError(
+                  f"Yahoo returned too little history: {len(yahoo_rows)} months"
+              )
+
+          meta = result.get("meta") or {}
+
+          try:
+              current_raw = float(meta.get("regularMarketPrice"))
+          except Exception:
+              current_raw = yahoo_rows[-1]["value"]
+
+          try:
+              current_dt = datetime.fromtimestamp(
+                  int(meta.get("regularMarketTime")), tz=timezone.utc
+              )
+          except Exception:
+              current_dt = datetime.strptime(
+                  yahoo_rows[-1]["date"], "%Y-%m-%d"
+              ).replace(tzinfo=timezone.utc)
+
+          # Match the modern Yahoo scale to the archived Wilshire scale.
+          historical_by_month = {
+              month_key(r["date"]): r["value"] for r in history_rows
+          }
+          yahoo_by_month = {
+              month_key(r["date"]): r["value"] for r in yahoo_rows
+          }
+
+          overlap = sorted(
+              set(historical_by_month) & set(yahoo_by_month)
+          )[-24:]
+
+          ratios = [
+              historical_by_month[k] / yahoo_by_month[k]
+              for k in overlap
+              if yahoo_by_month[k]
+              and math.isfinite(historical_by_month[k])
+              and math.isfinite(yahoo_by_month[k])
+          ]
+
+          if len(ratios) < 3:
+              raise RuntimeError(
+                  f"Not enough overlap to join historical/current series: {len(ratios)} months"
+              )
+
+          factor = statistics.median(ratios)
+
+          print(
+              f"Overlap months used: {len(ratios)}; "
+              f"rebase factor: {factor:.8f}"
+          )
+
+          combined = {
+              month_key(r["date"]): dict(r) for r in history_rows
+          }
+          historical_last_month = max(combined)
+
+          for row in yahoo_rows:
+              key = month_key(row["date"])
+              if key > historical_last_month:
+                  combined[key] = {
+                      **row,
+                      "value": row["value"] * factor,
+                  }
+
+          current_date = current_dt.strftime("%Y-%m-%d")
+          combined[month_key(current_date)] = {
+              "date": current_date,
+              "ts": int(current_dt.timestamp() * 1000),
+              "value": current_raw * factor,
+          }
+
+          rows = [combined[k] for k in sorted(combined)]
+
+          print(
+              f"Continuous monthly observations: {len(rows)} "
+              f"({rows[0]['date']} through {rows[-1]['date']})"
+          )
+
+          if len(rows) < 600:
+              raise RuntimeError(
+                  f"Need at least 600 months for the 50-year average; got {len(rows)}"
+              )
+
+          payload = {
+              "generatedAt": datetime.now(timezone.utc)
+              .isoformat()
+              .replace("+00:00", "Z"),
+              "benchmark": "Wilshire 5000 continuous benchmark",
+              "symbol": SYMBOL,
+              "currentPrice": current_raw * factor,
+              "rawYahooCurrentPrice": current_raw,
+              "marketTimestamp": current_dt.isoformat().replace("+00:00", "Z"),
+              "firstDate": rows[0]["date"],
+              "lastDate": rows[-1]["date"],
+              "rebaseFactor": factor,
+              "overlapMonthsUsed": len(ratios),
+              "sources": {
+                  "history": "Pinned archived Wilshire/FRED history stored locally",
+                  "continuation": "Yahoo Finance ^W5000",
+              },
+              "rows": rows,
+          }
+
+          OUTPUT_FILE.write_text(
+              json.dumps(payload, separators=(",", ":")) + "\n",
+              encoding="utf-8",
+          )
+
+          print(f"Wrote {OUTPUT_FILE}.")
+          PY
+
+      - name: Commit refreshed data
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add wilshire-history.csv market-data.json
+
+          if git diff --cached --quiet; then
+            echo "No market-data changes to commit."
+          else
+            git commit -m "Update Wilshire market data [skip ci]"
+            git push
+          fi

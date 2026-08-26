@@ -1,0 +1,1252 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta name="theme-color" content="#f4f6f8" />
+  <title>US Market Conditions</title>
+
+  <style>
+    :root {
+      --bg: #f4f6f8;
+      --card: #ffffff;
+      --text: #17202a;
+      --muted: #667085;
+      --border: #dfe3e8;
+      --accent: #2563eb;
+      --good: #087f5b;
+      --warn: #b45309;
+      --danger: #b42318;
+      --soft-blue: #f3f7ff;
+      --soft-warn: #fff8eb;
+      --shadow: 0 3px 16px rgba(16, 24, 40, 0.07);
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    .container {
+      max-width: 1180px;
+      margin: 0 auto;
+      padding: max(18px, env(safe-area-inset-top)) 16px
+               max(56px, env(safe-area-inset-bottom));
+    }
+
+    h1 {
+      margin: 0;
+      font-size: clamp(28px, 4vw, 40px);
+      letter-spacing: -0.03em;
+    }
+
+    h2 {
+      margin: 0 0 14px;
+      font-size: 19px;
+    }
+
+    .subtitle {
+      margin: 5px 0 0;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.45;
+    }
+
+    .card {
+      margin-top: 16px;
+      padding: 18px;
+      background: var(--card);
+      border: 1px solid rgba(16, 24, 40, 0.04);
+      border-radius: 18px;
+      box-shadow: var(--shadow);
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .grid-4 {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    @media (max-width: 850px) {
+      .grid { grid-template-columns: 1fr; }
+      .grid-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+
+    @media (max-width: 520px) {
+      .grid-4 { grid-template-columns: 1fr; }
+    }
+
+    label {
+      display: block;
+      margin: 0 0 6px;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: .04em;
+    }
+
+    input, select {
+      width: 100%;
+      min-height: 46px;
+      padding: 11px 12px;
+      border: 1px solid var(--border);
+      border-radius: 11px;
+      background: #fff;
+      color: var(--text);
+      font-size: 17px;
+    }
+
+    input:focus, select:focus {
+      outline: 3px solid rgba(37, 99, 235, 0.13);
+      border-color: var(--accent);
+    }
+
+    button {
+      width: 100%;
+      min-height: 48px;
+      margin-top: 14px;
+      border: 0;
+      border-radius: 11px;
+      padding: 0 16px;
+      background: var(--accent);
+      color: #fff;
+      font-size: 16px;
+      font-weight: 760;
+      cursor: pointer;
+    }
+
+    button:disabled {
+      opacity: .78;
+      cursor: wait;
+    }
+
+    .refresh-content {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 9px;
+    }
+
+    .spinner {
+      width: 18px;
+      height: 18px;
+      border: 3px solid rgba(255,255,255,.38);
+      border-top-color: #ffffff;
+      border-radius: 50%;
+      animation: spin .8s linear infinite;
+      flex: 0 0 auto;
+    }
+
+    .status-loading {
+      display: inline-flex;
+      align-items: center;
+      gap: 9px;
+    }
+
+    .status-spinner {
+      width: 16px;
+      height: 16px;
+      border: 2px solid rgba(37,99,235,.22);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin .8s linear infinite;
+      flex: 0 0 auto;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .spinner,
+      .status-spinner {
+        animation-duration: 1.8s;
+      }
+    }
+
+    .status {
+      margin-top: 12px;
+      padding: 11px 12px;
+      border-radius: 10px;
+      background: var(--soft-blue);
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.45;
+    }
+
+    .status.warn {
+      background: var(--soft-warn);
+      color: var(--warn);
+    }
+
+    .status.error {
+      background: #fff1f0;
+      color: var(--danger);
+    }
+
+    .decision {
+      text-align: center;
+      padding: 8px 0 4px;
+    }
+
+    .eyebrow {
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: .06em;
+    }
+
+    .big-percent {
+      margin: 5px 0 0;
+      font-size: clamp(58px, 10vw, 88px);
+      font-weight: 860;
+      line-height: 1;
+      letter-spacing: -0.055em;
+      color: var(--good);
+    }
+
+    .big-amount {
+      margin-top: 6px;
+      font-size: clamp(28px, 5vw, 40px);
+      font-weight: 800;
+    }
+
+    .decision-line {
+      margin: 10px auto 0;
+      max-width: 760px;
+      color: var(--muted);
+      font-size: 16px;
+      line-height: 1.45;
+    }
+
+    .metric {
+      min-height: 110px;
+      padding: 14px;
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      background: #fff;
+    }
+
+    .metric-label {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: .04em;
+    }
+
+    .metric-value {
+      margin-top: 5px;
+      font-size: clamp(22px, 4vw, 31px);
+      font-weight: 820;
+      letter-spacing: -0.025em;
+    }
+
+    .metric-sub {
+      margin-top: 5px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.35;
+    }
+
+    .manual-box {
+      margin-top: 14px;
+      padding: 14px 15px;
+      border-left: 4px solid var(--accent);
+      border-radius: 10px;
+      background: var(--soft-blue);
+      line-height: 1.5;
+    }
+
+    .manual-box.triggered {
+      border-left-color: var(--warn);
+      background: var(--soft-warn);
+    }
+
+    .chart-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: end;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+
+    .chart-head .range {
+      width: min(230px, 100%);
+    }
+
+    .chart-wrap {
+      position: relative;
+      margin-top: 14px;
+      height: 560px;
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      overflow: hidden;
+      background: #fff;
+    }
+
+    @media (max-width: 700px) {
+      .chart-wrap { height: 430px; }
+    }
+
+    svg {
+      display: block;
+      width: 100%;
+      height: 100%;
+      touch-action: pan-y;
+    }
+
+    .legend {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px 14px;
+      margin-top: 12px;
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .legend-item {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .swatch {
+      width: 22px;
+      height: 3px;
+      border-radius: 999px;
+    }
+
+    .tooltip {
+      position: absolute;
+      display: none;
+      z-index: 4;
+      pointer-events: none;
+      min-width: 160px;
+      max-width: 250px;
+      padding: 9px 10px;
+      border-radius: 9px;
+      background: rgba(23, 32, 42, .94);
+      color: #fff;
+      font-size: 12px;
+      line-height: 1.4;
+      box-shadow: 0 8px 26px rgba(0,0,0,.2);
+    }
+
+    .table-wrap {
+      overflow-x: auto;
+      -webkit-overflow-scrolling: touch;
+    }
+
+    table {
+      width: 100%;
+      min-width: 650px;
+      border-collapse: collapse;
+      font-size: 14px;
+    }
+
+    th, td {
+      padding: 11px 9px;
+      border-bottom: 1px solid var(--border);
+      text-align: right;
+      white-space: nowrap;
+    }
+
+    th:first-child, td:first-child { text-align: left; }
+
+    th {
+      color: var(--muted);
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: .04em;
+    }
+
+    tr.triggered { background: var(--soft-warn); }
+
+    .pill {
+      display: inline-block;
+      padding: 4px 8px;
+      border-radius: 999px;
+      background: #eef2f6;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 750;
+    }
+
+    .pill.hit {
+      background: #fff0d5;
+      color: var(--warn);
+    }
+
+    .footer-note {
+      margin-top: 14px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.5;
+    }
+
+    details {
+      margin-top: 12px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    summary {
+      cursor: pointer;
+      font-weight: 700;
+    }
+
+    code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    }
+  </style>
+</head>
+
+<body>
+<div class="container">
+
+  <header>
+    <h1>US Market Conditions</h1>
+    <p class="subtitle">
+      Wilshire 5000 Total Market Index · long-term moving-average monitor
+    </p>
+  </header>
+
+  <section class="card">
+    <h2>Friday input</h2>
+
+    <div class="grid">
+      <div>
+        <label for="paycheck">Paycheck / available income</label>
+        <input id="paycheck" type="number" inputmode="decimal" min="0" step="0.01" placeholder="2000" />
+      </div>
+
+      <div>
+        <label for="chartRange">Graph range</label>
+        <select id="chartRange">
+          <option value="5">5 years</option>
+          <option value="10">10 years</option>
+          <option value="20">20 years</option>
+          <option value="30">30 years</option>
+          <option value="50">50 years</option>
+          <option value="all" selected>All available history</option>
+        </select>
+      </div>
+
+      <div>
+        <label>Benchmark</label>
+        <input value="Wilshire 5000 (^W5000)" disabled />
+      </div>
+    </div>
+
+    <button id="refreshButton">Refresh market conditions</button>
+
+    <div id="status" class="status">
+      Tap Refresh market conditions to load the Wilshire 5000.
+    </div>
+
+    <details>
+      <summary>How the page gets its data</summary>
+      <p>
+        This is still one HTML file. Yahoo Finance is the market-data source.
+        Because Yahoo does not allow a normal webpage to call its feed directly,
+        the page tries two public CORS relays. If both are unavailable, the page
+        falls back to the most recent successful dataset saved on this iPad.
+      </p>
+    </details>
+  </section>
+
+  <section class="card">
+    <div class="decision">
+      <div class="eyebrow">Normal allocation</div>
+      <div class="big-percent" id="autoPercent">--</div>
+      <div class="big-amount" id="autoAmount">--</div>
+      <div class="decision-line" id="decisionLine">
+        Waiting for market data.
+      </div>
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="grid-4">
+      <div class="metric">
+        <div class="metric-label">Wilshire 5000</div>
+        <div class="metric-value" id="currentValue">--</div>
+        <div class="metric-sub" id="marketTime">Latest market reading</div>
+      </div>
+
+      <div class="metric">
+        <div class="metric-label">1-year average</div>
+        <div class="metric-value" id="avg1">--</div>
+        <div class="metric-sub" id="avg1Relation">Normal-rule benchmark</div>
+      </div>
+
+      <div class="metric">
+        <div class="metric-label">Rule target</div>
+        <div class="metric-value" id="targetValue">--</div>
+        <div class="metric-sub">Includes manual-review tiers</div>
+      </div>
+
+      <div class="metric">
+        <div class="metric-label">Manual additional</div>
+        <div class="metric-value" id="manualValue">--</div>
+        <div class="metric-sub">Never transferred automatically</div>
+      </div>
+    </div>
+
+    <div id="manualBox" class="manual-box">
+      Long-term thresholds are decision-support only.
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="chart-head">
+      <div>
+        <h2 style="margin-bottom:4px;">Price & monitored averages</h2>
+        <p class="subtitle" style="margin:0;">
+          Calculations use weekly observations. The chart thins points for readability when necessary.
+        </p>
+      </div>
+    </div>
+
+    <div id="chartWrap" class="chart-wrap">
+      <svg id="chart" viewBox="0 0 1000 560" preserveAspectRatio="none"></svg>
+      <div id="tooltip" class="tooltip"></div>
+    </div>
+
+    <div id="legend" class="legend"></div>
+  </section>
+
+  <section class="card">
+    <h2>Threshold monitor</h2>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Average</th>
+            <th>Level</th>
+            <th>Difference</th>
+            <th>Rule target</th>
+            <th>Status</th>
+          </tr>
+        </thead>
+        <tbody id="thresholdBody"></tbody>
+      </table>
+    </div>
+
+    <p class="footer-note">
+      Rule set: above the 1-year average → 7.5%; at or below the 1-year average → 10%.
+      At or below the 5-year average → 15% target, then +5 percentage points for every
+      additional five-year threshold through the 50-year average. Anything beyond the
+      normal 7.5% / 10% amount is shown only for manual review.
+    </p>
+  </section>
+
+</div>
+
+<script>
+(() => {
+  "use strict";
+
+  const SYMBOL = "^W5000";
+  const YEARS = [1, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50];
+
+  const COLORS = [
+    "#111827", "#2563eb", "#087f5b", "#7c3aed", "#b45309", "#be123c",
+    "#0f766e", "#9333ea", "#4d7c0f", "#c2410c", "#0369a1", "#6b7280"
+  ];
+
+  let weeklyRows = [];
+  let currentPrice = NaN;
+  let marketTimestamp = "";
+  let moving = {};
+  let currentAverages = {};
+
+  const $ = id => document.getElementById(id);
+
+  function money(value) {
+    return Number.isFinite(value)
+      ? new Intl.NumberFormat("en-US", {
+          style: "currency",
+          currency: "USD",
+          maximumFractionDigits: 2
+        }).format(value)
+      : "--";
+  }
+
+  function indexNumber(value) {
+    return Number.isFinite(value)
+      ? new Intl.NumberFormat("en-US", { maximumFractionDigits: 2 }).format(value)
+      : "--";
+  }
+
+  function pct(value, digits = 1) {
+    return Number.isFinite(value) ? `${value.toFixed(digits)}%` : "--";
+  }
+
+  function setStatus(message, kind = "") {
+    const el = $("status");
+    el.textContent = message;
+    el.className = "status" + (kind ? ` ${kind}` : "");
+  }
+
+  function setLoadingStatus(message) {
+    const el = $("status");
+    el.className = "status";
+    el.innerHTML =
+      `<span class="status-loading">` +
+      `<span class="status-spinner" aria-hidden="true"></span>` +
+      `<span>${message}</span>` +
+      `</span>`;
+  }
+
+  function setRefreshButtonLoading(isLoading) {
+    const button = $("refreshButton");
+    button.disabled = isLoading;
+
+    if (isLoading) {
+      button.innerHTML =
+        `<span class="refresh-content">` +
+        `<span class="spinner" aria-hidden="true"></span>` +
+        `<span>Refreshing market data…</span>` +
+        `</span>`;
+    } else {
+      button.textContent = "Refresh market conditions";
+    }
+  }
+
+  function saveSettings() {
+    localStorage.setItem("marketConditionsSettings", JSON.stringify({
+      paycheck: $("paycheck").value,
+      chartRange: $("chartRange").value
+    }));
+  }
+
+  function loadSettings() {
+    try {
+      const raw = localStorage.getItem("marketConditionsSettings");
+      if (!raw) return;
+      const s = JSON.parse(raw);
+      if (s.paycheck != null) $("paycheck").value = s.paycheck;
+      if (s.chartRange) $("chartRange").value = s.chartRange;
+    } catch {}
+  }
+
+  function cacheData(payload) {
+    try {
+      localStorage.setItem("wilshire5000CacheV1", JSON.stringify({
+        savedAt: new Date().toISOString(),
+        payload
+      }));
+    } catch (err) {
+      console.warn("Could not cache market data", err);
+    }
+  }
+
+  function getCachedData() {
+    try {
+      const raw = localStorage.getItem("wilshire5000CacheV1");
+      if (!raw) return null;
+      return JSON.parse(raw);
+    } catch {
+      return null;
+    }
+  }
+
+  async function fetchJsonText(url) {
+    const response = await fetch(url, { cache: "no-store" });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const text = await response.text();
+    return JSON.parse(text);
+  }
+
+  async function fetchThroughRelay(targetUrl) {
+    const relayUrls = [
+      `https://corsproxy.io/?url=${encodeURIComponent(targetUrl)}`,
+      `https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`
+    ];
+
+    const errors = [];
+
+    for (const relay of relayUrls) {
+      try {
+        return await fetchJsonText(relay);
+      } catch (err) {
+        errors.push(err.message);
+      }
+    }
+
+    throw new Error(`Both browser relays failed: ${errors.join(" | ")}`);
+  }
+
+  async function fetchYahoo() {
+    const url =
+      `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(SYMBOL)}` +
+      `?range=max&interval=1wk&includePrePost=false&events=div%2Csplits`;
+
+    return fetchThroughRelay(url);
+  }
+
+  function normalizeYahoo(json) {
+    const result = json?.chart?.result?.[0];
+
+    if (!result) {
+      const message = json?.chart?.error?.description || "Yahoo returned no chart data.";
+      throw new Error(message);
+    }
+
+    const timestamps = result.timestamp || [];
+    const closes = result.indicators?.quote?.[0]?.close || [];
+
+    const rows = [];
+
+    for (let i = 0; i < timestamps.length; i++) {
+      const close = Number(closes[i]);
+      if (!Number.isFinite(close)) continue;
+
+      rows.push({
+        ts: timestamps[i] * 1000,
+        date: new Date(timestamps[i] * 1000).toISOString().slice(0, 10),
+        value: close
+      });
+    }
+
+    if (rows.length < 100) {
+      throw new Error("Too little Wilshire history was returned.");
+    }
+
+    const metaPrice = Number(result.meta?.regularMarketPrice);
+    const lastClose = rows[rows.length - 1].value;
+
+    return {
+      rows,
+      currentPrice: Number.isFinite(metaPrice) ? metaPrice : lastClose,
+      marketTimestamp: Number.isFinite(Number(result.meta?.regularMarketTime))
+        ? new Date(Number(result.meta.regularMarketTime) * 1000).toLocaleString()
+        : rows[rows.length - 1].date
+    };
+  }
+
+  function simpleMovingAverage(values, period) {
+    const out = new Array(values.length).fill(null);
+    let sum = 0;
+
+    for (let i = 0; i < values.length; i++) {
+      sum += values[i];
+
+      if (i >= period) {
+        sum -= values[i - period];
+      }
+
+      if (i >= period - 1) {
+        out[i] = sum / period;
+      }
+    }
+
+    return out;
+  }
+
+  function computeMovingAverages() {
+    const values = weeklyRows.map(r => r.value);
+    moving = {};
+    currentAverages = {};
+
+    YEARS.forEach(year => {
+      const period = year * 52;
+      const series = simpleMovingAverage(values, period);
+      moving[year] = series;
+
+      let latest = NaN;
+      for (let i = series.length - 1; i >= 0; i--) {
+        if (Number.isFinite(series[i])) {
+          latest = series[i];
+          break;
+        }
+      }
+      currentAverages[year] = latest;
+    });
+  }
+
+  function calculateDecision() {
+    const paycheck = Number($("paycheck").value) || 0;
+    const avg1 = currentAverages[1];
+
+    let autoPercent = 10;
+    if (Number.isFinite(avg1) && currentPrice > avg1) {
+      autoPercent = 7.5;
+    }
+
+    let targetPercent = autoPercent;
+    let deepestTrigger = null;
+
+    YEARS.filter(y => y >= 5).forEach(year => {
+      const avg = currentAverages[year];
+      if (Number.isFinite(avg) && currentPrice <= avg) {
+        const tierTarget = 10 + year;
+        if (tierTarget > targetPercent) {
+          targetPercent = tierTarget;
+          deepestTrigger = year;
+        }
+      }
+    });
+
+    const autoAmount = paycheck * autoPercent / 100;
+    const targetAmount = paycheck * targetPercent / 100;
+    const manualAdditional = Math.max(0, targetAmount - autoAmount);
+
+    return {
+      paycheck,
+      autoPercent,
+      targetPercent,
+      deepestTrigger,
+      autoAmount,
+      targetAmount,
+      manualAdditional
+    };
+  }
+
+  function renderDashboard() {
+    if (!weeklyRows.length || !Number.isFinite(currentPrice)) return;
+
+    const d = calculateDecision();
+    const avg1 = currentAverages[1];
+
+    $("currentValue").textContent = indexNumber(currentPrice);
+    $("marketTime").textContent = marketTimestamp
+      ? `Market reading: ${marketTimestamp}`
+      : "Latest market reading";
+
+    $("avg1").textContent = indexNumber(avg1);
+
+    const oneYearDiff = Number.isFinite(avg1)
+      ? (currentPrice / avg1 - 1) * 100
+      : NaN;
+
+    $("avg1Relation").textContent = Number.isFinite(oneYearDiff)
+      ? `${pct(Math.abs(oneYearDiff))} ${oneYearDiff >= 0 ? "above" : "below"} the 1-year average`
+      : "Normal-rule benchmark";
+
+    $("autoPercent").textContent = `${d.autoPercent}%`;
+    $("autoAmount").textContent = money(d.autoAmount);
+
+    $("decisionLine").textContent =
+      currentPrice > avg1
+        ? `The Wilshire 5000 is above its 1-year average. Your normal rule calls for ${d.autoPercent}% of this paycheck.`
+        : `The Wilshire 5000 is at or below its 1-year average. Your normal rule calls for ${d.autoPercent}% of this paycheck.`;
+
+    $("targetValue").textContent = `${d.targetPercent}% / ${money(d.targetAmount)}`;
+    $("manualValue").textContent = money(d.manualAdditional);
+
+    const box = $("manualBox");
+
+    if (d.deepestTrigger) {
+      box.className = "manual-box triggered";
+      box.innerHTML =
+        `<strong>Manual review triggered: ${d.deepestTrigger}-year average.</strong><br>` +
+        `Total rule target: <strong>${d.targetPercent}% (${money(d.targetAmount)})</strong>.<br>` +
+        `Normal amount: ${d.autoPercent}% (${money(d.autoAmount)}). ` +
+        `Additional amount to consider manually: <strong>${money(d.manualAdditional)}</strong>.`;
+    } else {
+      box.className = "manual-box";
+      box.innerHTML =
+        `<strong>No long-term manual threshold is currently triggered.</strong><br>` +
+        `The ${d.autoPercent}% normal rule is active.`;
+    }
+
+    renderThresholdTable();
+    renderChart();
+  }
+
+  function renderThresholdTable() {
+    const body = $("thresholdBody");
+    body.innerHTML = "";
+
+    YEARS.forEach(year => {
+      const avg = currentAverages[year];
+      const tr = document.createElement("tr");
+
+      if (!Number.isFinite(avg)) {
+        tr.innerHTML = `
+          <td>${year}-year</td>
+          <td>Not enough history</td>
+          <td>--</td>
+          <td>${year === 1 ? "7.5% / 10%" : `${10 + year}%`}</td>
+          <td><span class="pill">Unavailable</span></td>
+        `;
+        body.appendChild(tr);
+        return;
+      }
+
+      const diff = (currentPrice / avg - 1) * 100;
+      const hit = currentPrice <= avg;
+      const target = year === 1
+        ? (currentPrice > avg ? "7.5%" : "10%")
+        : `${10 + year}%`;
+
+      if (year >= 5 && hit) tr.className = "triggered";
+
+      tr.innerHTML = `
+        <td>${year}-year</td>
+        <td>${indexNumber(avg)}</td>
+        <td>${pct(diff)}</td>
+        <td>${target}</td>
+        <td><span class="pill ${year >= 5 && hit ? "hit" : ""}">${hit ? "At / below" : "Above"}</span></td>
+      `;
+
+      body.appendChild(tr);
+    });
+  }
+
+  function visibleStartIndex() {
+    const range = $("chartRange").value;
+    if (range === "all") return 0;
+
+    const years = Number(range);
+    const cutoff = Date.now() - years * 365.2425 * 24 * 60 * 60 * 1000;
+
+    const idx = weeklyRows.findIndex(r => r.ts >= cutoff);
+    return idx >= 0 ? idx : 0;
+  }
+
+  function sampleIndices(startIndex) {
+    const total = weeklyRows.length - startIndex;
+    const maxPoints = 700;
+    const step = Math.max(1, Math.ceil(total / maxPoints));
+
+    const out = [];
+    for (let i = startIndex; i < weeklyRows.length; i += step) {
+      out.push(i);
+    }
+
+    if (out[out.length - 1] !== weeklyRows.length - 1) {
+      out.push(weeklyRows.length - 1);
+    }
+
+    return out;
+  }
+
+  function svgEl(name, attrs = {}) {
+    const el = document.createElementNS("http://www.w3.org/2000/svg", name);
+    Object.entries(attrs).forEach(([k, v]) => el.setAttribute(k, String(v)));
+    return el;
+  }
+
+  function renderChart() {
+    const svg = $("chart");
+    const legend = $("legend");
+    const tooltip = $("tooltip");
+
+    svg.innerHTML = "";
+    legend.innerHTML = "";
+
+    const width = 1000;
+    const height = 560;
+    const pad = { left: 74, right: 22, top: 26, bottom: 48 };
+    const plotW = width - pad.left - pad.right;
+    const plotH = height - pad.top - pad.bottom;
+
+    const startIndex = visibleStartIndex();
+    const indices = sampleIndices(startIndex);
+
+    const series = [
+      {
+        label: "Wilshire 5000",
+        color: COLORS[0],
+        width: 2.6,
+        values: weeklyRows.map(r => r.value)
+      }
+    ];
+
+    YEARS.forEach((year, idx) => {
+      if ((moving[year] || []).some(Number.isFinite)) {
+        series.push({
+          label: `${year}-year average`,
+          color: COLORS[(idx + 1) % COLORS.length],
+          width: year === 1 ? 2.2 : 1.25,
+          values: moving[year]
+        });
+      }
+    });
+
+    let minY = Infinity;
+    let maxY = -Infinity;
+
+    series.forEach(s => {
+      indices.forEach(i => {
+        const v = s.values[i];
+        if (Number.isFinite(v)) {
+          minY = Math.min(minY, v);
+          maxY = Math.max(maxY, v);
+        }
+      });
+    });
+
+    if (!Number.isFinite(minY) || !Number.isFinite(maxY)) return;
+
+    const spread = maxY - minY || 1;
+    minY -= spread * 0.04;
+    maxY += spread * 0.04;
+
+    const firstTs = weeklyRows[indices[0]].ts;
+    const lastTs = weeklyRows[indices[indices.length - 1]].ts;
+    const xFor = ts => pad.left + ((ts - firstTs) / Math.max(1, lastTs - firstTs)) * plotW;
+    const yFor = v => pad.top + (1 - (v - minY) / (maxY - minY)) * plotH;
+
+    const bg = svgEl("rect", {
+      x: 0, y: 0, width, height, fill: "#ffffff"
+    });
+    svg.appendChild(bg);
+
+    const yTicks = 6;
+    for (let t = 0; t <= yTicks; t++) {
+      const frac = t / yTicks;
+      const y = pad.top + frac * plotH;
+      const value = maxY - frac * (maxY - minY);
+
+      svg.appendChild(svgEl("line", {
+        x1: pad.left, x2: width - pad.right,
+        y1: y, y2: y,
+        stroke: "#e8ecf1", "stroke-width": 1
+      }));
+
+      const text = svgEl("text", {
+        x: pad.left - 10,
+        y: y + 4,
+        "text-anchor": "end",
+        fill: "#667085",
+        "font-size": 12
+      });
+
+      text.textContent = new Intl.NumberFormat("en-US", {
+        notation: "compact",
+        maximumFractionDigits: 1
+      }).format(value);
+
+      svg.appendChild(text);
+    }
+
+    const xTickCount = 7;
+    for (let t = 0; t <= xTickCount; t++) {
+      const frac = t / xTickCount;
+      const ts = firstTs + frac * (lastTs - firstTs);
+      const x = pad.left + frac * plotW;
+      const d = new Date(ts);
+
+      const text = svgEl("text", {
+        x,
+        y: height - 18,
+        "text-anchor": t === 0 ? "start" : (t === xTickCount ? "end" : "middle"),
+        fill: "#667085",
+        "font-size": 12
+      });
+
+      text.textContent =
+        (lastTs - firstTs) > 12 * 365 * 24 * 60 * 60 * 1000
+          ? String(d.getUTCFullYear())
+          : d.toLocaleDateString(undefined, { month: "short", year: "2-digit" });
+
+      svg.appendChild(text);
+    }
+
+    series.forEach(s => {
+      let d = "";
+      let penDown = false;
+
+      indices.forEach(i => {
+        const v = s.values[i];
+
+        if (!Number.isFinite(v)) {
+          penDown = false;
+          return;
+        }
+
+        const x = xFor(weeklyRows[i].ts);
+        const y = yFor(v);
+
+        d += `${penDown ? "L" : "M"}${x.toFixed(2)},${y.toFixed(2)} `;
+        penDown = true;
+      });
+
+      svg.appendChild(svgEl("path", {
+        d,
+        fill: "none",
+        stroke: s.color,
+        "stroke-width": s.width,
+        "vector-effect": "non-scaling-stroke",
+        "stroke-linejoin": "round",
+        "stroke-linecap": "round"
+      }));
+
+      const item = document.createElement("div");
+      item.className = "legend-item";
+      item.innerHTML = `<span class="swatch" style="background:${s.color}"></span><span>${s.label}</span>`;
+      legend.appendChild(item);
+    });
+
+    const hoverLine = svgEl("line", {
+      x1: 0, x2: 0,
+      y1: pad.top, y2: height - pad.bottom,
+      stroke: "#98a2b3",
+      "stroke-width": 1,
+      "stroke-dasharray": "4 4",
+      visibility: "hidden",
+      "vector-effect": "non-scaling-stroke"
+    });
+
+    svg.appendChild(hoverLine);
+
+    function onPointer(evt) {
+      const rect = svg.getBoundingClientRect();
+      const localX = ((evt.clientX - rect.left) / rect.width) * width;
+
+      if (localX < pad.left || localX > width - pad.right) {
+        tooltip.style.display = "none";
+        hoverLine.setAttribute("visibility", "hidden");
+        return;
+      }
+
+      const frac = (localX - pad.left) / plotW;
+      const targetTs = firstTs + frac * (lastTs - firstTs);
+
+      let best = indices[0];
+      let bestDist = Math.abs(weeklyRows[best].ts - targetTs);
+
+      for (const i of indices) {
+        const dist = Math.abs(weeklyRows[i].ts - targetTs);
+        if (dist < bestDist) {
+          best = i;
+          bestDist = dist;
+        }
+      }
+
+      const x = xFor(weeklyRows[best].ts);
+      hoverLine.setAttribute("x1", x);
+      hoverLine.setAttribute("x2", x);
+      hoverLine.setAttribute("visibility", "visible");
+
+      const lines = [
+        `<strong>${weeklyRows[best].date}</strong>`,
+        `Wilshire: ${indexNumber(weeklyRows[best].value)}`
+      ];
+
+      YEARS.forEach(year => {
+        const v = moving[year]?.[best];
+        if (Number.isFinite(v)) {
+          lines.push(`${year}y avg: ${indexNumber(v)}`);
+        }
+      });
+
+      tooltip.innerHTML = lines.join("<br>");
+      tooltip.style.display = "block";
+
+      const wrap = $("chartWrap").getBoundingClientRect();
+      let left = evt.clientX - wrap.left + 14;
+      let top = evt.clientY - wrap.top + 14;
+
+      if (left + 250 > wrap.width) left -= 264;
+      if (top + 220 > wrap.height) top -= 230;
+
+      tooltip.style.left = `${Math.max(8, left)}px`;
+      tooltip.style.top = `${Math.max(8, top)}px`;
+    }
+
+    svg.addEventListener("pointermove", onPointer);
+    svg.addEventListener("pointerdown", onPointer);
+    svg.addEventListener("pointerleave", () => {
+      tooltip.style.display = "none";
+      hoverLine.setAttribute("visibility", "hidden");
+    });
+  }
+
+  function applyNormalizedData(data) {
+    weeklyRows = data.rows;
+    currentPrice = data.currentPrice;
+    marketTimestamp = data.marketTimestamp;
+    computeMovingAverages();
+    renderDashboard();
+  }
+
+  async function refresh() {
+    saveSettings();
+
+    setRefreshButtonLoading(true);
+    setLoadingStatus("Retrieving Wilshire 5000 history…");
+
+    try {
+      const raw = await fetchYahoo();
+      const normalized = normalizeYahoo(raw);
+
+      applyNormalizedData(normalized);
+      cacheData(normalized);
+
+      setStatus(
+        `Updated successfully. Latest market reading: ${indexNumber(currentPrice)}.`
+      );
+    } catch (err) {
+      console.warn(err);
+
+      const cached = getCachedData();
+
+      if (cached?.payload?.rows?.length) {
+        applyNormalizedData(cached.payload);
+
+        const saved = cached.savedAt
+          ? new Date(cached.savedAt).toLocaleString()
+          : "an earlier session";
+
+        setStatus(
+          `Live refresh failed, so the page is showing its last saved dataset from ${saved}.`,
+          "warn"
+        );
+      } else {
+        setStatus(
+          `Could not retrieve market data. ${err.message}`,
+          "error"
+        );
+      }
+    } finally {
+      setRefreshButtonLoading(false);
+    }
+  }
+
+  $("refreshButton").addEventListener("click", refresh);
+
+  $("paycheck").addEventListener("input", () => {
+    saveSettings();
+    if (weeklyRows.length) renderDashboard();
+  });
+
+  $("chartRange").addEventListener("change", () => {
+    saveSettings();
+    if (weeklyRows.length) renderChart();
+  });
+
+  loadSettings();
+
+  const cached = getCachedData();
+  if (cached?.payload?.rows?.length) {
+    try {
+      applyNormalizedData(cached.payload);
+      setStatus("Showing the last saved dataset. Tap Refresh market conditions for a live update.");
+    } catch {}
+  }
+})();
+</script>
+</body>
+</html>

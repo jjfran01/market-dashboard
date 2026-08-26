@@ -1,0 +1,540 @@
+name: Update market context v7
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Run once each weekday after the evening market-data refresh.
+    - cron: "10 23 * * 1-5"
+
+permissions:
+  contents: write
+
+jobs:
+  update-context:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build purchasing-power and Buffett context
+        shell: bash
+        env:
+          ALPHA_VANTAGE_API_KEY: ${{ secrets.ALPHA_VANTAGE_API_KEY }}
+        run: |
+          python - <<'PY'
+          import csv
+          import io
+          import json
+          import math
+          import os
+          import statistics
+          import time
+          import urllib.parse
+          import urllib.request
+          from bisect import bisect_right
+          from datetime import datetime, timezone
+          from pathlib import Path
+
+          MARKET_FILE = Path("market-data.json")
+          OUTPUT_FILE = Path("market-context.json")
+          API_KEY = os.environ.get("ALPHA_VANTAGE_API_KEY", "").strip()
+
+          if not API_KEY:
+              raise RuntimeError("ALPHA_VANTAGE_API_KEY repository secret is missing")
+
+          if not MARKET_FILE.exists():
+              raise RuntimeError("market-data.json is missing. Run Update market data v4 first.")
+
+          UA = (
+              "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+              "AppleWebKit/537.36 (KHTML, like Gecko) "
+              "Chrome/124.0 Safari/537.36"
+          )
+
+          def download(url, attempts=3, timeout=30):
+              last = None
+              for attempt in range(1, attempts + 1):
+                  try:
+                      print(f"Download attempt {attempt}/{attempts}: {url.split('apikey=')[0]}")
+                      req = urllib.request.Request(
+                          url,
+                          headers={
+                              "User-Agent": UA,
+                              "Accept": "application/json,text/csv,text/plain,*/*",
+                              "Cache-Control": "no-cache",
+                          },
+                      )
+                      with urllib.request.urlopen(req, timeout=timeout) as response:
+                          data = response.read()
+                      if not data:
+                          raise RuntimeError("empty response")
+                      print(f"Downloaded {len(data):,} bytes")
+                      return data
+                  except Exception as exc:
+                      last = exc
+                      print(f"Attempt {attempt} failed: {type(exc).__name__}: {exc}")
+                      if attempt < attempts:
+                          time.sleep(min(2 ** attempt, 8))
+              raise RuntimeError(f"Download failed after {attempts} attempts: {last}")
+
+          def month_key(date_text):
+              return date_text[:7]
+
+          def parse_date(date_text):
+              return datetime.strptime(date_text[:10], "%Y-%m-%d").replace(tzinfo=timezone.utc)
+
+          def fred_rows(series_id, start="1970-01-01"):
+              url = (
+                  "https://fred.stlouisfed.org/graph/fredgraph.csv?"
+                  + urllib.parse.urlencode({"id": series_id, "cosd": start})
+              )
+              text = download(url, attempts=3, timeout=30).decode("utf-8-sig", "replace")
+              reader = csv.reader(io.StringIO(text))
+              rows = []
+              first = True
+
+              for parts in reader:
+                  if first:
+                      first = False
+                      continue
+                  if len(parts) < 2:
+                      continue
+                  raw_date = parts[0].strip()
+                  raw_value = parts[1].strip()
+                  try:
+                      value = float(raw_value)
+                      dt = parse_date(raw_date)
+                  except Exception:
+                      continue
+                  if math.isfinite(value):
+                      rows.append(
+                          {
+                              "date": dt.strftime("%Y-%m-%d"),
+                              "ts": int(dt.timestamp() * 1000),
+                              "value": value,
+                          }
+                      )
+
+              if not rows:
+                  raise RuntimeError(f"FRED {series_id} returned no usable observations")
+
+              rows.sort(key=lambda r: r["date"])
+              print(
+                  f"{series_id}: {len(rows)} observations "
+                  f"({rows[0]['date']} through {rows[-1]['date']})"
+              )
+              return rows
+
+          def alpha_json(params):
+              url = (
+                  "https://www.alphavantage.co/query?"
+                  + urllib.parse.urlencode({**params, "apikey": API_KEY})
+              )
+              payload = json.loads(download(url, attempts=3, timeout=30).decode("utf-8", "replace"))
+
+              if isinstance(payload, dict):
+                  detail = (
+                      payload.get("Error Message")
+                      or payload.get("Note")
+                      or payload.get("Information")
+                  )
+                  if detail and not payload.get("data"):
+                      raise RuntimeError(f"Alpha Vantage error: {detail}")
+
+              return payload
+
+          def parse_alpha_history(payload, label):
+              rows = []
+
+              # Current commodity APIs commonly return {"data":[{"date":...,"value":...}, ...]}.
+              if isinstance(payload, dict) and isinstance(payload.get("data"), list):
+                  candidates = payload["data"]
+                  for item in candidates:
+                      if not isinstance(item, dict):
+                          continue
+                      date_text = item.get("date") or item.get("timestamp")
+                      raw = (
+                          item.get("value")
+                          if item.get("value") is not None
+                          else item.get("close")
+                      )
+                      if raw is None:
+                          raw = item.get("price")
+                      try:
+                          value = float(raw)
+                          dt = parse_date(str(date_text))
+                      except Exception:
+                          continue
+                      if math.isfinite(value) and value > 0:
+                          rows.append(
+                              {
+                                  "date": dt.strftime("%Y-%m-%d"),
+                                  "ts": int(dt.timestamp() * 1000),
+                                  "value": value,
+                              }
+                          )
+
+              # Flexible fallback for time-series-shaped JSON.
+              if not rows and isinstance(payload, dict):
+                  for key, block in payload.items():
+                      if "time series" not in key.lower() or not isinstance(block, dict):
+                          continue
+                      for date_text, item in block.items():
+                          if not isinstance(item, dict):
+                              continue
+                          raw = (
+                              item.get("4. close")
+                              or item.get("close")
+                              or item.get("value")
+                              or item.get("price")
+                          )
+                          try:
+                              value = float(raw)
+                              dt = parse_date(str(date_text))
+                          except Exception:
+                              continue
+                          if math.isfinite(value) and value > 0:
+                              rows.append(
+                                  {
+                                      "date": dt.strftime("%Y-%m-%d"),
+                                      "ts": int(dt.timestamp() * 1000),
+                                      "value": value,
+                                  }
+                              )
+
+              if not rows:
+                  keys = list(payload.keys())[:12] if isinstance(payload, dict) else []
+                  raise RuntimeError(f"Could not parse {label} history; response keys: {keys}")
+
+              # Keep the last observation in each month.
+              monthly = {}
+              for row in sorted(rows, key=lambda r: r["date"]):
+                  monthly[month_key(row["date"])] = row
+              out = [monthly[k] for k in sorted(monthly)]
+              print(
+                  f"{label}: {len(out)} monthly observations "
+                  f"({out[0]['date']} through {out[-1]['date']})"
+              )
+              return out
+
+          def quarter_key(date_text):
+              dt = parse_date(date_text)
+              q = (dt.month - 1) // 3 + 1
+              return f"{dt.year}Q{q}"
+
+          def quarter_end_month(qkey):
+              year = int(qkey[:4])
+              q = int(qkey[-1])
+              month = q * 3
+              return f"{year:04d}-{month:02d}"
+
+          def asof_month_map(rows, target_months):
+              values = {}
+              source_months = [month_key(r["date"]) for r in rows]
+              source_values = [r["value"] for r in rows]
+
+              for month in target_months:
+                  idx = bisect_right(source_months, month) - 1
+                  if idx >= 0:
+                      values[month] = source_values[idx]
+              return values
+
+          market_payload = json.loads(MARKET_FILE.read_text(encoding="utf-8"))
+          market_rows = [
+              {
+                  "date": str(r["date"]),
+                  "ts": int(r["ts"]),
+                  "value": float(r["value"]),
+              }
+              for r in market_payload.get("rows", [])
+              if r.get("date") and r.get("ts") is not None and r.get("value") is not None
+          ]
+          market_rows = [
+              r for r in market_rows
+              if math.isfinite(r["value"]) and r["value"] > 0
+          ]
+          market_rows.sort(key=lambda r: r["date"])
+
+          if len(market_rows) < 600:
+              raise RuntimeError(f"market-data.json has only {len(market_rows)} usable months")
+
+          market_by_month = {month_key(r["date"]): r for r in market_rows}
+          market_months = sorted(market_by_month)
+
+          # Purchasing-power comparators.
+          minimum_wage = fred_rows("FEDMINNFRWG", "1970-01-01")
+          cpi = fred_rows("CPIAUCNS", "1970-01-01")
+          commodities = fred_rows("PPIACO", "1970-01-01")
+
+          gold = parse_alpha_history(
+              alpha_json(
+                  {
+                      "function": "GOLD_SILVER_HISTORY",
+                      "symbol": "GOLD",
+                      "interval": "monthly",
+                  }
+              ),
+              "Gold",
+          )
+
+          # A short gap avoids hammering the free API.
+          time.sleep(2)
+
+          silver = parse_alpha_history(
+              alpha_json(
+                  {
+                      "function": "GOLD_SILVER_HISTORY",
+                      "symbol": "SILVER",
+                      "interval": "monthly",
+                  }
+              ),
+              "Silver",
+          )
+
+          comparators = [
+              {
+                  "key": "minimumWage",
+                  "label": "Market / Federal Minimum Wage",
+                  "shortLabel": "Minimum wage",
+                  "source": "FRED FEDMINNFRWG",
+                  "unit": "Dollars per hour",
+                  "rows": minimum_wage,
+              },
+              {
+                  "key": "gold",
+                  "label": "Market / Gold",
+                  "shortLabel": "Gold",
+                  "source": "Alpha Vantage GOLD_SILVER_HISTORY",
+                  "unit": "Dollars per troy ounce",
+                  "rows": gold,
+              },
+              {
+                  "key": "silver",
+                  "label": "Market / Silver",
+                  "shortLabel": "Silver",
+                  "source": "Alpha Vantage GOLD_SILVER_HISTORY",
+                  "unit": "Dollars per troy ounce",
+                  "rows": silver,
+              },
+              {
+                  "key": "cpi",
+                  "label": "Market / CPI",
+                  "shortLabel": "CPI",
+                  "source": "FRED CPIAUCNS",
+                  "unit": "Index",
+                  "rows": cpi,
+              },
+              {
+                  "key": "commodities",
+                  "label": "Market / Broad Commodities",
+                  "shortLabel": "Broad commodities",
+                  "source": "FRED PPIACO",
+                  "unit": "Index 1982=100",
+                  "rows": commodities,
+              },
+          ]
+
+          # Align every comparator to the market's monthly calendar with as-of values.
+          for comp in comparators:
+              comp["asof"] = asof_month_map(comp["rows"], market_months)
+              comp["firstMarketMonth"] = next(
+                  (m for m in market_months if m in comp["asof"]),
+                  None,
+              )
+              if not comp["firstMarketMonth"]:
+                  raise RuntimeError(f"{comp['shortLabel']} has no overlap with market history")
+
+          base_month = max(comp["firstMarketMonth"] for comp in comparators)
+          base_market = market_by_month[base_month]["value"]
+
+          normalization_series = []
+
+          for comp in comparators:
+              base_comparator = comp["asof"].get(base_month)
+              if not base_comparator or base_comparator <= 0:
+                  raise RuntimeError(
+                      f"{comp['shortLabel']} has no valid value at common base {base_month}"
+                  )
+
+              base_ratio = base_market / base_comparator
+              out_rows = []
+
+              for month in market_months:
+                  if month < base_month:
+                      continue
+                  comparator_value = comp["asof"].get(month)
+                  market_row = market_by_month[month]
+
+                  if not comparator_value or comparator_value <= 0:
+                      continue
+
+                  normalized = (market_row["value"] / comparator_value) / base_ratio * 100.0
+
+                  if math.isfinite(normalized):
+                      out_rows.append(
+                          {
+                              "date": market_row["date"],
+                              "ts": market_row["ts"],
+                              "value": normalized,
+                          }
+                      )
+
+              latest_source = comp["rows"][-1]
+
+              normalization_series.append(
+                  {
+                      "key": comp["key"],
+                      "label": comp["label"],
+                      "shortLabel": comp["shortLabel"],
+                      "source": comp["source"],
+                      "comparatorUnit": comp["unit"],
+                      "latestComparatorDate": latest_source["date"],
+                      "latestComparatorValue": latest_source["value"],
+                      "rows": out_rows,
+                  }
+              )
+
+          print(f"Normalization common base month: {base_month}")
+
+          # Buffett Indicator: public U.S. corporate equity market value / GNP.
+          market_cap = fred_rows("BOGZ1LM883164115Q", "1970-01-01")
+          gnp = fred_rows("GNP", "1970-01-01")
+
+          cap_by_q = {quarter_key(r["date"]): r for r in market_cap}
+          gnp_by_q = {quarter_key(r["date"]): r for r in gnp}
+
+          official_rows = []
+
+          for qkey in sorted(set(cap_by_q) & set(gnp_by_q)):
+              year = int(qkey[:4])
+              if year < 1976:
+                  continue
+
+              cap_millions = cap_by_q[qkey]["value"]
+              gnp_billions = gnp_by_q[qkey]["value"]
+
+              if cap_millions <= 0 or gnp_billions <= 0:
+                  continue
+
+              ratio = (cap_millions / 1000.0) / gnp_billions * 100.0
+              dt = parse_date(cap_by_q[qkey]["date"])
+
+              official_rows.append(
+                  {
+                      "quarter": qkey,
+                      "date": dt.strftime("%Y-%m-%d"),
+                      "ts": int(dt.timestamp() * 1000),
+                      "ratio": ratio,
+                      "marketCapBillions": cap_millions / 1000.0,
+                      "gnpBillions": gnp_billions,
+                  }
+              )
+
+          if len(official_rows) < 100:
+              raise RuntimeError(
+                  f"Buffett indicator history unexpectedly short: {len(official_rows)} quarters"
+              )
+
+          latest_official = official_rows[-1]
+          latest_cap_q = max(cap_by_q)
+          latest_gnp_q = max(gnp_by_q)
+          latest_cap = cap_by_q[latest_cap_q]["value"]
+          latest_gnp = gnp_by_q[latest_gnp_q]["value"]
+
+          cap_end_month = quarter_end_month(latest_cap_q)
+          market_base_month = max(m for m in market_months if m <= cap_end_month)
+          market_at_cap = market_by_month[market_base_month]["value"]
+          current_market = market_rows[-1]["value"]
+
+          nowcast_cap_millions = latest_cap * (current_market / market_at_cap)
+          nowcast_ratio = (nowcast_cap_millions / 1000.0) / latest_gnp * 100.0
+
+          historical_ratios = [r["ratio"] for r in official_rows]
+          historical_median = statistics.median(historical_ratios)
+          percentile = (
+              sum(1 for value in historical_ratios if value <= nowcast_ratio)
+              / len(historical_ratios)
+              * 100.0
+          )
+          distance_from_median = (nowcast_ratio / historical_median - 1.0) * 100.0
+
+          context = {
+              "version": 7,
+              "generatedAt": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+              "normalization": {
+                  "baseMonth": base_month,
+                  "baseValue": 100,
+                  "description": (
+                      "Each line is the Wilshire market level divided by the comparator, "
+                      "then indexed to 100 at the common starting month."
+                  ),
+                  "series": normalization_series,
+              },
+              "buffett": {
+                  "description": (
+                      "Public U.S. corporate equity market value divided by Gross National Product."
+                  ),
+                  "officialRows": official_rows,
+                  "latestOfficial": latest_official,
+                  "historicalMedian": historical_median,
+                  "nowcast": {
+                      "date": market_rows[-1]["date"],
+                      "ts": market_rows[-1]["ts"],
+                      "ratio": nowcast_ratio,
+                      "marketCapBillions": nowcast_cap_millions / 1000.0,
+                      "gnpBillions": latest_gnp,
+                      "marketCapBaseQuarter": latest_cap_q,
+                      "gnpQuarter": latest_gnp_q,
+                      "marketScalingBaseMonth": market_base_month,
+                      "historicalPercentile": percentile,
+                      "distanceFromMedianPct": distance_from_median,
+                      "method": (
+                          "Latest official public-equity market value is scaled by the "
+                          "Wilshire proxy's move since that quarter; divided by latest GNP."
+                      ),
+                  },
+              },
+              "sources": {
+                  "minimumWage": "FRED FEDMINNFRWG",
+                  "cpi": "FRED CPIAUCNS",
+                  "broadCommodities": "FRED PPIACO",
+                  "gold": "Alpha Vantage GOLD_SILVER_HISTORY",
+                  "silver": "Alpha Vantage GOLD_SILVER_HISTORY",
+                  "publicEquityMarketValue": "FRED BOGZ1LM883164115Q",
+                  "gnp": "FRED GNP",
+              },
+          }
+
+          OUTPUT_FILE.write_text(
+              json.dumps(context, separators=(",", ":")) + "\n",
+              encoding="utf-8",
+          )
+
+          print(
+              f"Wrote {OUTPUT_FILE}: normalization base {base_month}; "
+              f"{len(official_rows)} Buffett quarters; "
+              f"nowcast {nowcast_ratio:.1f}%."
+          )
+          PY
+
+      - name: Commit refreshed context
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add market-context.json
+
+          if git diff --cached --quiet; then
+            echo "No market-context changes to commit."
+          else
+            git commit -m "Update market context v7 [skip ci]"
+            git push
+          fi

@@ -457,7 +457,7 @@
       </div>
 
       <div class="metric">
-        <div class="metric-label">Rule target</div>
+        <div class="metric-label">Investment rate</div>
         <div class="metric-value" id="targetValue">--</div>
         <div class="metric-sub">Includes manual-review tiers</div>
       </div>
@@ -499,7 +499,7 @@
             <th>Average</th>
             <th>Level</th>
             <th>Difference</th>
-            <th>Rule target</th>
+            <th>Investment Rate</th>
             <th>Status</th>
           </tr>
         </thead>
@@ -508,10 +508,11 @@
     </div>
 
     <p class="footer-note">
-      Rule set: above the 1-year average → 7.5%; at or below the 1-year average → 10%.
-      At or below the 5-year average → 15% target, then +5 percentage points for every
-      additional five-year threshold through the 50-year average. Long-term tiers are
-      shown for manual review; only the normal 7.5% / 10% amount is automatic.
+      Investment-rate rule: above the 1-year average → 7.5%; below the 1-year average
+      while still above the 5-year average → 10%; at or below the 5-year average → 15%,
+      then +5 percentage points for every additional five-year threshold through the
+      50-year average. Long-term tiers are shown for manual review; only the normal
+      7.5% / 10% amount is automatic.
     </p>
   </section>
 </div>
@@ -717,10 +718,14 @@
     $("autoPercent").textContent = `${d.autoPercent}%`;
     $("autoAmount").textContent = money(d.autoAmount);
 
+    const avg5 = currentAverages[5];
+
     $("decisionLine").textContent =
       currentPrice > avg1
-        ? `The market is above its 1-year average. Your normal rule calls for ${d.autoPercent}% of this paycheck.`
-        : `The market is at or below its 1-year average. Your normal rule calls for ${d.autoPercent}% of this paycheck.`;
+        ? `The market is above its 1-year average. The investment rate is 7.5% of this paycheck.`
+        : (Number.isFinite(avg5) && currentPrice > avg5)
+          ? `The market is below its 1-year average but above its 5-year average. The investment rate is 10% of this paycheck.`
+          : `The market is at or below its 5-year average. A long-term investment-rate tier is active for manual review.`;
 
     $("targetValue").textContent = `${d.targetPercent}% / ${money(d.targetAmount)}`;
     $("manualValue").textContent = money(d.manualAdditional);
@@ -731,7 +736,7 @@
       box.className = "manual-box triggered";
       box.innerHTML =
         `<strong>Manual review triggered: ${d.deepestTrigger}-year average.</strong><br>` +
-        `Total rule target: <strong>${d.targetPercent}% (${money(d.targetAmount)})</strong>.<br>` +
+        `Investment rate: <strong>${d.targetPercent}% (${money(d.targetAmount)})</strong>.<br>` +
         `Normal amount: ${d.autoPercent}% (${money(d.autoAmount)}). ` +
         `Additional amount to consider manually: <strong>${money(d.manualAdditional)}</strong>.`;
     } else {

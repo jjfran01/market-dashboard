@@ -1,0 +1,422 @@
+name: Update market data v4
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "30 12 * * 1-5"
+    - cron: "30 22 * * 1-5"
+
+permissions:
+  contents: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build market data
+        shell: bash
+        env:
+          ALPHA_VANTAGE_API_KEY: ${{ secrets.ALPHA_VANTAGE_API_KEY }}
+        run: |
+          python - <<'PY'
+          import csv
+          import io
+          import json
+          import math
+          import os
+          import statistics
+          import urllib.parse
+          import urllib.request
+          from collections import OrderedDict
+          from datetime import datetime, timezone
+          from pathlib import Path
+
+          HISTORY_FILE = Path("wilshire-history.csv")
+          OUTPUT_FILE = Path("market-data.json")
+
+          # Archived Wilshire 5000 Full Cap Price Index copied from FRED
+          # and pinned to a specific public GitHub commit.
+          HISTORY_SEED = (
+              "https://raw.githubusercontent.com/"
+              "boggs2louky/EAP/"
+              "13c262c3e0bed1dbf9bd8620010199ce2636e40b/"
+              "data/WILL5000PRFC.csv"
+          )
+
+          API_KEY = os.environ.get("ALPHA_VANTAGE_API_KEY", "").strip()
+          SYMBOL = "WFIVX"
+
+          if not API_KEY:
+              raise RuntimeError(
+                  "ALPHA_VANTAGE_API_KEY repository secret is missing"
+              )
+
+          def download(url, timeout=30):
+              req = urllib.request.Request(
+                  url,
+                  headers={
+                      "User-Agent": "market-dashboard/1.0",
+                      "Accept": "application/json,text/csv,text/plain,*/*",
+                  },
+              )
+              with urllib.request.urlopen(req, timeout=timeout) as response:
+                  data = response.read()
+
+              if not data:
+                  raise RuntimeError("empty response")
+
+              return data
+
+          def month_key(date_text):
+              return date_text[:7]
+
+          def to_month_end(rows):
+              by_month = OrderedDict()
+
+              for row in sorted(rows, key=lambda r: r["date"]):
+                  by_month[month_key(row["date"])] = row
+
+              return list(by_month.values())
+
+          def parse_history_seed(text):
+              rows = []
+              reader = csv.reader(io.StringIO(text))
+
+              first = True
+              for parts in reader:
+                  if first:
+                      first = False
+                      continue
+
+                  if len(parts) < 2:
+                      continue
+
+                  try:
+                      value = float(parts[1].strip())
+                      dt = datetime.strptime(
+                          parts[0].strip()[:10], "%Y-%m-%d"
+                      ).replace(tzinfo=timezone.utc)
+                  except Exception:
+                      continue
+
+                  if math.isfinite(value):
+                      rows.append(
+                          {
+                              "date": dt.strftime("%Y-%m-%d"),
+                              "ts": int(dt.timestamp() * 1000),
+                              "value": value,
+                          }
+                      )
+
+              return to_month_end(rows)
+
+          def save_history(rows):
+              with HISTORY_FILE.open(
+                  "w", newline="", encoding="utf-8"
+              ) as f:
+                  writer = csv.writer(f)
+                  writer.writerow(["date", "value"])
+
+                  for row in rows:
+                      writer.writerow(
+                          [row["date"], f'{row["value"]:.8f}']
+                      )
+
+          def load_history():
+              rows = []
+
+              with HISTORY_FILE.open(
+                  "r", newline="", encoding="utf-8"
+              ) as f:
+                  reader = csv.DictReader(f)
+
+                  for item in reader:
+                      try:
+                          value = float(item["value"])
+                          dt = datetime.strptime(
+                              item["date"], "%Y-%m-%d"
+                          ).replace(tzinfo=timezone.utc)
+                      except Exception:
+                          continue
+
+                      if math.isfinite(value):
+                          rows.append(
+                              {
+                                  "date": dt.strftime("%Y-%m-%d"),
+                                  "ts": int(dt.timestamp() * 1000),
+                                  "value": value,
+                              }
+                          )
+
+              return to_month_end(rows)
+
+          # Historical seed: use our own saved copy after the first success.
+          if HISTORY_FILE.exists():
+              print("Using local wilshire-history.csv")
+              history_rows = load_history()
+          else:
+              print("Seeding archived Wilshire history")
+              seed_text = download(HISTORY_SEED).decode(
+                  "utf-8-sig", "replace"
+              )
+              history_rows = parse_history_seed(seed_text)
+              save_history(history_rows)
+              print("Created wilshire-history.csv")
+
+          if len(history_rows) < 500:
+              raise RuntimeError(
+                  "Historical seed is too short: "
+                  f"{len(history_rows)} months"
+              )
+
+          print(
+              f"Historical observations: {len(history_rows)} "
+              f"({history_rows[0]['date']} through "
+              f"{history_rows[-1]['date']})"
+          )
+
+          # WFIVX closely tracks the Wilshire 5000 and supplies the
+          # continuation after the archived Wilshire price series ends.
+          monthly_url = (
+              "https://www.alphavantage.co/query?"
+              + urllib.parse.urlencode(
+                  {
+                      "function": "TIME_SERIES_MONTHLY",
+                      "symbol": SYMBOL,
+                      "apikey": API_KEY,
+                  }
+              )
+          )
+
+          payload = json.loads(
+              download(monthly_url).decode("utf-8", "replace")
+          )
+
+          series = payload.get("Monthly Time Series")
+
+          if not series:
+              detail = (
+                  payload.get("Error Message")
+                  or payload.get("Note")
+                  or payload.get("Information")
+                  or str(payload)[:500]
+              )
+              raise RuntimeError(
+                  f"Alpha Vantage monthly data failed: {detail}"
+              )
+
+          fund_rows = []
+
+          for date_text, values in series.items():
+              try:
+                  value = float(values["4. close"])
+                  dt = datetime.strptime(
+                      date_text, "%Y-%m-%d"
+                  ).replace(tzinfo=timezone.utc)
+              except Exception:
+                  continue
+
+              if math.isfinite(value):
+                  fund_rows.append(
+                      {
+                          "date": dt.strftime("%Y-%m-%d"),
+                          "ts": int(dt.timestamp() * 1000),
+                          "value": value,
+                      }
+                  )
+
+          fund_rows = to_month_end(fund_rows)
+
+          if len(fund_rows) < 24:
+              raise RuntimeError(
+                  "Alpha Vantage returned too little WFIVX history: "
+                  f"{len(fund_rows)} months"
+              )
+
+          print(
+              f"WFIVX observations: {len(fund_rows)} "
+              f"({fund_rows[0]['date']} through "
+              f"{fund_rows[-1]['date']})"
+          )
+
+          historical = {
+              month_key(r["date"]): r["value"]
+              for r in history_rows
+          }
+          fund = {
+              month_key(r["date"]): r["value"]
+              for r in fund_rows
+          }
+
+          overlap = sorted(set(historical) & set(fund))[-24:]
+          ratios = [
+              historical[k] / fund[k]
+              for k in overlap
+              if fund[k]
+              and math.isfinite(historical[k])
+              and math.isfinite(fund[k])
+          ]
+
+          if len(ratios) < 12:
+              raise RuntimeError(
+                  "Not enough overlap to connect the series: "
+                  f"{len(ratios)} months"
+              )
+
+          factor = statistics.median(ratios)
+
+          print(
+              f"Overlap months used: {len(ratios)}; "
+              f"rebase factor: {factor:.8f}"
+          )
+
+          combined = {
+              month_key(r["date"]): dict(r)
+              for r in history_rows
+          }
+
+          history_last_month = max(combined)
+
+          for row in fund_rows:
+              key = month_key(row["date"])
+
+              if key > history_last_month:
+                  combined[key] = {
+                      **row,
+                      "value": row["value"] * factor,
+                  }
+
+          # Try to get today's/latest WFIVX NAV. If unavailable,
+          # keep the latest monthly close instead of failing the job.
+          latest = fund_rows[-1]
+          current_date = latest["date"]
+          current_raw = latest["value"]
+
+          quote_url = (
+              "https://www.alphavantage.co/query?"
+              + urllib.parse.urlencode(
+                  {
+                      "function": "GLOBAL_QUOTE",
+                      "symbol": SYMBOL,
+                      "apikey": API_KEY,
+                  }
+              )
+          )
+
+          try:
+              quote_payload = json.loads(
+                  download(quote_url).decode("utf-8", "replace")
+              )
+
+              quote = quote_payload.get("Global Quote") or {}
+              quote_price = float(quote.get("05. price"))
+              quote_date = quote.get("07. latest trading day")
+
+              if (
+                  quote_date
+                  and math.isfinite(quote_price)
+                  and quote_price > 0
+              ):
+                  current_date = quote_date
+                  current_raw = quote_price
+                  print(
+                      f"Using current WFIVX NAV/quote: "
+                      f"{current_raw} on {current_date}"
+                  )
+          except Exception as exc:
+              print(
+                  "Current quote unavailable; "
+                  f"using monthly value instead: {exc}"
+              )
+
+          current_dt = datetime.strptime(
+              current_date, "%Y-%m-%d"
+          ).replace(tzinfo=timezone.utc)
+
+          combined[month_key(current_date)] = {
+              "date": current_date,
+              "ts": int(current_dt.timestamp() * 1000),
+              "value": current_raw * factor,
+          }
+
+          rows = [
+              combined[k]
+              for k in sorted(combined)
+          ]
+
+          if len(rows) < 600:
+              raise RuntimeError(
+                  "Need at least 600 monthly observations "
+                  f"for a 50-year average; got {len(rows)}"
+              )
+
+          result = {
+              "generatedAt": (
+                  datetime.now(timezone.utc)
+                  .isoformat()
+                  .replace("+00:00", "Z")
+              ),
+              "benchmark": (
+                  "Wilshire 5000 continuous market proxy"
+              ),
+              "symbol": (
+                  "Archived Wilshire 5000 + WFIVX continuation"
+              ),
+              "currentPrice": current_raw * factor,
+              "marketTimestamp": (
+                  current_dt.isoformat()
+                  .replace("+00:00", "Z")
+              ),
+              "firstDate": rows[0]["date"],
+              "lastDate": rows[-1]["date"],
+              "rebaseFactor": factor,
+              "overlapMonthsUsed": len(ratios),
+              "sources": {
+                  "history": (
+                      "Archived Wilshire 5000 Full Cap Price Index"
+                  ),
+                  "continuation": (
+                      "Alpha Vantage WFIVX monthly NAV"
+                  ),
+              },
+              "rows": rows,
+          }
+
+          OUTPUT_FILE.write_text(
+              json.dumps(
+                  result,
+                  separators=(",", ":"),
+              ) + "\n",
+              encoding="utf-8",
+          )
+
+          print(
+              f"Wrote market-data.json: {len(rows)} months "
+              f"({rows[0]['date']} through {rows[-1]['date']})"
+          )
+          PY
+
+      - name: Commit refreshed data
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add wilshire-history.csv market-data.json
+
+          if git diff --cached --quiet; then
+            echo "No market-data changes to commit."
+          else
+            git commit -m "Update Wilshire market data [skip ci]"
+            git push
+          fi

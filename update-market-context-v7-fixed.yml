@@ -1,0 +1,650 @@
+name: Update market context v7
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Run once each weekday after the evening market-data refresh.
+    - cron: "10 23 * * 1-5"
+
+permissions:
+  contents: write
+
+jobs:
+  update-context:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build purchasing-power and Buffett context
+        shell: bash
+        env:
+          ALPHA_VANTAGE_API_KEY: ${{ secrets.ALPHA_VANTAGE_API_KEY }}
+        run: |
+          python - <<'PY'
+          import calendar
+          import json
+          import math
+          import os
+          import statistics
+          import time
+          import urllib.parse
+          import urllib.request
+          from bisect import bisect_right
+          from datetime import datetime, timezone
+          from pathlib import Path
+
+          MARKET_FILE = Path("market-data.json")
+          OUTPUT_FILE = Path("market-context.json")
+          API_KEY = os.environ.get("ALPHA_VANTAGE_API_KEY", "").strip()
+
+          if not API_KEY:
+              raise RuntimeError("ALPHA_VANTAGE_API_KEY repository secret is missing")
+
+          if not MARKET_FILE.exists():
+              raise RuntimeError("market-data.json is missing. Run Update market data v4 first.")
+
+          UA = (
+              "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+              "AppleWebKit/537.36 (KHTML, like Gecko) "
+              "Chrome/124.0 Safari/537.36"
+          )
+
+          def request_bytes(url, data=None, headers=None, attempts=3, timeout=30):
+              last = None
+              headers = {"User-Agent": UA, "Accept": "application/json,*/*", **(headers or {})}
+              for attempt in range(1, attempts + 1):
+                  try:
+                      safe_url = url.split("apikey=")[0]
+                      print(f"Request attempt {attempt}/{attempts}: {safe_url}")
+                      req = urllib.request.Request(url, data=data, headers=headers)
+                      with urllib.request.urlopen(req, timeout=timeout) as response:
+                          payload = response.read()
+                      if not payload:
+                          raise RuntimeError("empty response")
+                      print(f"Downloaded {len(payload):,} bytes")
+                      return payload
+                  except Exception as exc:
+                      last = exc
+                      print(f"Attempt {attempt} failed: {type(exc).__name__}: {exc}")
+                      if attempt < attempts:
+                          time.sleep(min(2 ** attempt, 8))
+              raise RuntimeError(f"Request failed after {attempts} attempts: {last}")
+
+          def get_json(url, attempts=3, timeout=30):
+              return json.loads(request_bytes(url, attempts=attempts, timeout=timeout).decode("utf-8", "replace"))
+
+          def post_json(url, payload, attempts=2, timeout=30):
+              body = json.dumps(payload).encode("utf-8")
+              raw = request_bytes(
+                  url,
+                  data=body,
+                  headers={"Content-Type": "application/json"},
+                  attempts=attempts,
+                  timeout=timeout,
+              )
+              return json.loads(raw.decode("utf-8", "replace"))
+
+          def dt_to_row(dt, value):
+              dt = dt.replace(tzinfo=timezone.utc)
+              return {
+                  "date": dt.strftime("%Y-%m-%d"),
+                  "ts": int(dt.timestamp() * 1000),
+                  "value": float(value),
+              }
+
+          def parse_date(date_text):
+              return datetime.strptime(str(date_text)[:10], "%Y-%m-%d")
+
+          def month_key(date_text):
+              return str(date_text)[:7]
+
+          def period_to_datetime(period):
+              text = str(period).strip()
+              if len(text) >= 10 and text[4] == "-" and text[7] == "-":
+                  return datetime.strptime(text[:10], "%Y-%m-%d")
+              if len(text) == 7 and text[4] == "-" and text[5] == "Q" and text[6] in "1234":
+                  year = int(text[:4])
+                  quarter = int(text[6])
+                  month = quarter * 3
+                  return datetime(year, month, calendar.monthrange(year, month)[1])
+              if len(text) == 7 and text[4] == "-" and text[5:7].isdigit():
+                  return datetime(int(text[:4]), int(text[5:7]), 1)
+              if len(text) == 4 and text.isdigit():
+                  return datetime(int(text), 12, 31)
+              raise ValueError(f"Unsupported period: {period}")
+
+          def quarter_key(date_text):
+              dt = parse_date(date_text)
+              return f"{dt.year}Q{((dt.month - 1) // 3) + 1}"
+
+          def quarter_end_month(qkey):
+              year = int(qkey[:4])
+              quarter = int(qkey[-1])
+              return f"{year:04d}-{quarter * 3:02d}"
+
+          def monthly_last(rows):
+              out = {}
+              for row in sorted(rows, key=lambda r: r["date"]):
+                  out[month_key(row["date"])] = row
+              return [out[k] for k in sorted(out)]
+
+          def asof_month_map(rows, target_months):
+              source = monthly_last(rows)
+              months = [month_key(r["date"]) for r in source]
+              values = [r["value"] for r in source]
+              out = {}
+              for target in target_months:
+                  idx = bisect_right(months, target) - 1
+                  if idx >= 0:
+                      out[target] = values[idx]
+              return out
+
+          def load_previous_series(key):
+              if not OUTPUT_FILE.exists():
+                  return None
+              try:
+                  old = json.loads(OUTPUT_FILE.read_text(encoding="utf-8"))
+                  for item in old.get("normalization", {}).get("series", []):
+                      if item.get("key") == key and item.get("rows"):
+                          return item
+              except Exception as exc:
+                  print(f"Could not read previous context fallback: {exc}")
+              return None
+
+          # ------------------------------------------------------------------
+          # Existing Wilshire/WFIVX market proxy
+          # ------------------------------------------------------------------
+          market_payload = json.loads(MARKET_FILE.read_text(encoding="utf-8"))
+          market_rows = []
+          for raw in market_payload.get("rows", []):
+              try:
+                  value = float(raw["value"])
+                  ts = int(raw["ts"])
+                  date = str(raw["date"])
+              except Exception:
+                  continue
+              if math.isfinite(value) and value > 0:
+                  market_rows.append({"date": date, "ts": ts, "value": value})
+
+          market_rows.sort(key=lambda r: r["date"])
+          if len(market_rows) < 600:
+              raise RuntimeError(f"market-data.json has only {len(market_rows)} usable months")
+
+          market_by_month = {month_key(r["date"]): r for r in market_rows}
+          market_months = sorted(market_by_month)
+
+          # ------------------------------------------------------------------
+          # Federal minimum wage — deterministic official DOL rate schedule.
+          # No network request is needed for this slow-changing series.
+          # ------------------------------------------------------------------
+          MIN_WAGE_CHANGES = [
+              ("1976-01", 2.30),
+              ("1978-01", 2.65),
+              ("1979-01", 2.90),
+              ("1980-01", 3.10),
+              ("1981-01", 3.35),
+              ("1990-04", 3.80),
+              ("1991-04", 4.25),
+              ("1996-10", 4.75),
+              ("1997-09", 5.15),
+              ("2007-07", 5.85),
+              ("2008-07", 6.55),
+              ("2009-07", 7.25),
+          ]
+
+          min_months = [m for m, _ in MIN_WAGE_CHANGES]
+          min_values = [v for _, v in MIN_WAGE_CHANGES]
+          minimum_wage = []
+          for month in market_months:
+              idx = bisect_right(min_months, month) - 1
+              if idx < 0:
+                  continue
+              dt = datetime(int(month[:4]), int(month[5:7]), 1)
+              minimum_wage.append(dt_to_row(dt, min_values[idx]))
+
+          # ------------------------------------------------------------------
+          # CPI and broad commodity PPI — use the BLS public API directly.
+          # The unregistered API allows 10 years per query, so fetch both series
+          # together in decade-sized chunks. DBnomics is a nonfatal fallback.
+          # ------------------------------------------------------------------
+          def bls_histories(series_ids, first_year, last_year):
+              collected = {sid: [] for sid in series_ids}
+              endpoint = "https://api.bls.gov/publicAPI/v1/timeseries/data/"
+              start = first_year
+
+              while start <= last_year:
+                  end = min(start + 9, last_year)
+                  payload = {
+                      "seriesid": series_ids,
+                      "startyear": str(start),
+                      "endyear": str(end),
+                  }
+                  response = post_json(endpoint, payload, attempts=2, timeout=30)
+                  if response.get("status") != "REQUEST_SUCCEEDED":
+                      raise RuntimeError(f"BLS API failed for {start}-{end}: {response.get('message')}")
+
+                  returned = response.get("Results", {}).get("series", [])
+                  for series in returned:
+                      sid = series.get("seriesID")
+                      if sid not in collected:
+                          continue
+                      for item in series.get("data", []):
+                          period = str(item.get("period", ""))
+                          if not (period.startswith("M") and len(period) == 3 and period[1:].isdigit()):
+                              continue
+                          month = int(period[1:])
+                          if month < 1 or month > 12:
+                              continue
+                          try:
+                              value = float(item.get("value"))
+                              year = int(item.get("year"))
+                          except Exception:
+                              continue
+                          if math.isfinite(value):
+                              collected[sid].append(dt_to_row(datetime(year, month, 1), value))
+                  start = end + 1
+                  time.sleep(0.4)
+
+              for sid in series_ids:
+                  collected[sid] = monthly_last(collected[sid])
+                  if not collected[sid]:
+                      raise RuntimeError(f"BLS returned no usable values for {sid}")
+                  print(
+                      f"BLS {sid}: {len(collected[sid])} months "
+                      f"({collected[sid][0]['date']} through {collected[sid][-1]['date']})"
+                  )
+              return collected
+
+          def dbnomics_rows(provider, dataset, series_code):
+              url = (
+                  "https://api.db.nomics.world/v22/series/"
+                  f"{urllib.parse.quote(provider, safe='')}/"
+                  f"{urllib.parse.quote(dataset, safe='')}/"
+                  f"{urllib.parse.quote(series_code, safe='')}?observations=1"
+              )
+              payload = get_json(url, attempts=3, timeout=30)
+              docs = payload.get("series", {}).get("docs", [])
+              if not docs:
+                  raise RuntimeError(f"DBnomics returned no series for {provider}/{dataset}/{series_code}")
+              doc = docs[0]
+              periods = doc.get("period") or doc.get("periods") or []
+              values = doc.get("value") or doc.get("values") or []
+              if len(periods) != len(values) or not periods:
+                  raise RuntimeError(
+                      f"DBnomics observations malformed for {provider}/{dataset}/{series_code}"
+                  )
+              rows = []
+              for period, raw_value in zip(periods, values):
+                  try:
+                      value = float(raw_value)
+                      dt = period_to_datetime(period)
+                  except Exception:
+                      continue
+                  if math.isfinite(value):
+                      rows.append(dt_to_row(dt, value))
+              rows.sort(key=lambda r: r["date"])
+              if not rows:
+                  raise RuntimeError(f"DBnomics had no numeric data for {provider}/{dataset}/{series_code}")
+              print(
+                  f"DBnomics {provider}/{dataset}/{series_code}: {len(rows)} observations "
+                  f"({rows[0]['date']} through {rows[-1]['date']})"
+              )
+              return rows
+
+          try:
+              bls = bls_histories(
+                  ["CUUR0000SA0", "WPU00000000"],
+                  int(market_months[0][:4]),
+                  int(market_months[-1][:4]),
+              )
+              cpi = bls["CUUR0000SA0"]
+              commodities = bls["WPU00000000"]
+              cpi_source = "BLS CUUR0000SA0"
+              commodity_source = "BLS WPU00000000"
+          except Exception as exc:
+              print(f"BLS direct fetch failed; trying DBnomics mirrors: {exc}")
+              cpi = dbnomics_rows("BLS", "cu", "CUUR0000SA0")
+              commodities = dbnomics_rows("BLS", "wp", "WPU00000000")
+              cpi_source = "DBnomics mirror of BLS CUUR0000SA0"
+              commodity_source = "DBnomics mirror of BLS WPU00000000"
+
+          # ------------------------------------------------------------------
+          # Gold and silver — Alpha Vantage historical metals endpoint.
+          # ------------------------------------------------------------------
+          def alpha_json(params):
+              url = (
+                  "https://www.alphavantage.co/query?"
+                  + urllib.parse.urlencode({**params, "apikey": API_KEY})
+              )
+              payload = get_json(url, attempts=3, timeout=30)
+              if isinstance(payload, dict):
+                  detail = payload.get("Error Message") or payload.get("Note") or payload.get("Information")
+                  if detail and not payload.get("data"):
+                      raise RuntimeError(f"Alpha Vantage error: {detail}")
+              return payload
+
+          def parse_alpha_history(payload, label):
+              rows = []
+              if isinstance(payload, dict) and isinstance(payload.get("data"), list):
+                  for item in payload["data"]:
+                      if not isinstance(item, dict):
+                          continue
+                      date_text = item.get("date") or item.get("timestamp")
+                      raw = item.get("value")
+                      if raw is None:
+                          raw = item.get("close")
+                      if raw is None:
+                          raw = item.get("price")
+                      try:
+                          value = float(raw)
+                          dt = parse_date(date_text)
+                      except Exception:
+                          continue
+                      if math.isfinite(value) and value > 0:
+                          rows.append(dt_to_row(dt, value))
+
+              if not rows and isinstance(payload, dict):
+                  for key, block in payload.items():
+                      if "time series" not in key.lower() or not isinstance(block, dict):
+                          continue
+                      for date_text, item in block.items():
+                          if not isinstance(item, dict):
+                              continue
+                          raw = item.get("4. close") or item.get("close") or item.get("value") or item.get("price")
+                          try:
+                              value = float(raw)
+                              dt = parse_date(date_text)
+                          except Exception:
+                              continue
+                          if math.isfinite(value) and value > 0:
+                              rows.append(dt_to_row(dt, value))
+
+              rows = monthly_last(rows)
+              if not rows:
+                  keys = list(payload.keys())[:12] if isinstance(payload, dict) else []
+                  raise RuntimeError(f"Could not parse {label} history; response keys: {keys}")
+              print(f"{label}: {len(rows)} monthly observations ({rows[0]['date']} through {rows[-1]['date']})")
+              return rows
+
+          def metal_history(symbol, key, label):
+              try:
+                  return parse_alpha_history(
+                      alpha_json(
+                          {
+                              "function": "GOLD_SILVER_HISTORY",
+                              "symbol": symbol,
+                              "interval": "monthly",
+                          }
+                      ),
+                      label,
+                  )
+              except Exception as exc:
+                  previous = load_previous_series(key)
+                  if previous and previous.get("rawRows"):
+                      print(f"{label} refresh failed; reusing cached raw history: {exc}")
+                      return previous["rawRows"]
+                  raise
+
+          gold = metal_history("GOLD", "gold", "Gold")
+          time.sleep(2)
+          silver = metal_history("SILVER", "silver", "Silver")
+
+          # ------------------------------------------------------------------
+          # Build purchasing-power ratio series, all rebased to 100 at one
+          # common starting month.
+          # ------------------------------------------------------------------
+          comparators = [
+              {
+                  "key": "minimumWage",
+                  "label": "Market / Federal Minimum Wage",
+                  "shortLabel": "Minimum wage",
+                  "source": "U.S. Department of Labor federal minimum-wage schedule",
+                  "unit": "Dollars per hour",
+                  "rows": minimum_wage,
+              },
+              {
+                  "key": "gold",
+                  "label": "Market / Gold",
+                  "shortLabel": "Gold",
+                  "source": "Alpha Vantage GOLD_SILVER_HISTORY",
+                  "unit": "Dollars per troy ounce",
+                  "rows": gold,
+              },
+              {
+                  "key": "silver",
+                  "label": "Market / Silver",
+                  "shortLabel": "Silver",
+                  "source": "Alpha Vantage GOLD_SILVER_HISTORY",
+                  "unit": "Dollars per troy ounce",
+                  "rows": silver,
+              },
+              {
+                  "key": "cpi",
+                  "label": "Market / CPI",
+                  "shortLabel": "CPI",
+                  "source": cpi_source,
+                  "unit": "Index",
+                  "rows": cpi,
+              },
+              {
+                  "key": "commodities",
+                  "label": "Market / Broad Commodities",
+                  "shortLabel": "Broad commodities",
+                  "source": commodity_source,
+                  "unit": "Index",
+                  "rows": commodities,
+              },
+          ]
+
+          for comp in comparators:
+              comp["asof"] = asof_month_map(comp["rows"], market_months)
+              comp["firstMarketMonth"] = next((m for m in market_months if m in comp["asof"]), None)
+              if not comp["firstMarketMonth"]:
+                  raise RuntimeError(f"{comp['shortLabel']} has no overlap with market history")
+
+          base_month = max(comp["firstMarketMonth"] for comp in comparators)
+          base_market = market_by_month[base_month]["value"]
+          normalization_series = []
+
+          for comp in comparators:
+              base_comparator = comp["asof"].get(base_month)
+              if not base_comparator or base_comparator <= 0:
+                  raise RuntimeError(f"{comp['shortLabel']} has no valid value at common base {base_month}")
+
+              base_ratio = base_market / base_comparator
+              out_rows = []
+              for month in market_months:
+                  if month < base_month:
+                      continue
+                  comparator_value = comp["asof"].get(month)
+                  if not comparator_value or comparator_value <= 0:
+                      continue
+                  market_row = market_by_month[month]
+                  normalized = (market_row["value"] / comparator_value) / base_ratio * 100.0
+                  if math.isfinite(normalized):
+                      out_rows.append(
+                          {
+                              "date": market_row["date"],
+                              "ts": market_row["ts"],
+                              "value": normalized,
+                          }
+                      )
+
+              latest_source = comp["rows"][-1]
+              normalization_series.append(
+                  {
+                      "key": comp["key"],
+                      "label": comp["label"],
+                      "shortLabel": comp["shortLabel"],
+                      "source": comp["source"],
+                      "comparatorUnit": comp["unit"],
+                      "latestComparatorDate": latest_source["date"],
+                      "latestComparatorValue": latest_source["value"],
+                      "rows": out_rows,
+                      # Cache the raw comparator history so a transient provider
+                      # failure on a later run does not destroy the dashboard.
+                      "rawRows": comp["rows"],
+                  }
+              )
+
+          print(f"Normalization common base month: {base_month}")
+
+          # ------------------------------------------------------------------
+          # Buffett Indicator — Fed Z.1 public-corporate-equity market value
+          # divided by BEA Gross National Product. DBnomics provides a unified
+          # mirror of both primary-source datasets, avoiding the FRED CSV timeout
+          # that caused v7 run #1 to fail.
+          # ------------------------------------------------------------------
+          try:
+              market_cap = dbnomics_rows("FED", "Z1", "LM883164115.Q")
+              gnp = dbnomics_rows("BEA", "NIPA-T10705", "A001RC-Q")
+          except Exception as exc:
+              if OUTPUT_FILE.exists():
+                  try:
+                      previous = json.loads(OUTPUT_FILE.read_text(encoding="utf-8"))
+                      previous_buffett = previous.get("buffett")
+                      if previous_buffett and previous_buffett.get("officialRows"):
+                          print(f"Buffett refresh failed; reusing previous Buffett section: {exc}")
+                          previous_buffett["refreshWarning"] = str(exc)
+                          buffett_section = previous_buffett
+                      else:
+                          raise
+                  except Exception:
+                      raise exc
+              else:
+                  raise
+          else:
+              cap_by_q = {quarter_key(r["date"]): r for r in market_cap}
+              gnp_by_q = {quarter_key(r["date"]): r for r in gnp}
+              official_rows = []
+
+              for qkey in sorted(set(cap_by_q) & set(gnp_by_q)):
+                  if int(qkey[:4]) < 1976:
+                      continue
+                  cap_millions = cap_by_q[qkey]["value"]
+                  gnp_millions = gnp_by_q[qkey]["value"]
+                  if cap_millions <= 0 or gnp_millions <= 0:
+                      continue
+                  ratio = cap_millions / gnp_millions * 100.0
+                  dt = parse_date(cap_by_q[qkey]["date"])
+                  official_rows.append(
+                      {
+                          "quarter": qkey,
+                          "date": dt.strftime("%Y-%m-%d"),
+                          "ts": int(dt.replace(tzinfo=timezone.utc).timestamp() * 1000),
+                          "ratio": ratio,
+                          "marketCapBillions": cap_millions / 1000.0,
+                          "gnpBillions": gnp_millions / 1000.0,
+                      }
+                  )
+
+              if len(official_rows) < 100:
+                  raise RuntimeError(f"Buffett indicator history unexpectedly short: {len(official_rows)} quarters")
+
+              latest_official = official_rows[-1]
+              latest_cap_q = max(cap_by_q)
+              latest_gnp_q = max(gnp_by_q)
+              latest_cap_millions = cap_by_q[latest_cap_q]["value"]
+              latest_gnp_millions = gnp_by_q[latest_gnp_q]["value"]
+
+              cap_end_month = quarter_end_month(latest_cap_q)
+              eligible = [m for m in market_months if m <= cap_end_month]
+              if not eligible:
+                  raise RuntimeError("No Wilshire proxy observation available for Buffett scaling base")
+              market_base_month = max(eligible)
+              market_at_cap = market_by_month[market_base_month]["value"]
+              current_market = market_rows[-1]["value"]
+
+              nowcast_cap_millions = latest_cap_millions * (current_market / market_at_cap)
+              nowcast_ratio = nowcast_cap_millions / latest_gnp_millions * 100.0
+
+              historical_ratios = [r["ratio"] for r in official_rows]
+              historical_median = statistics.median(historical_ratios)
+              percentile = (
+                  sum(1 for value in historical_ratios if value <= nowcast_ratio)
+                  / len(historical_ratios)
+                  * 100.0
+              )
+              distance_from_median = (nowcast_ratio / historical_median - 1.0) * 100.0
+
+              buffett_section = {
+                  "description": "Public U.S. corporate equity market value divided by Gross National Product.",
+                  "officialRows": official_rows,
+                  "latestOfficial": latest_official,
+                  "historicalMedian": historical_median,
+                  "nowcast": {
+                      "date": market_rows[-1]["date"],
+                      "ts": market_rows[-1]["ts"],
+                      "ratio": nowcast_ratio,
+                      "marketCapBillions": nowcast_cap_millions / 1000.0,
+                      "gnpBillions": latest_gnp_millions / 1000.0,
+                      "marketCapBaseQuarter": latest_cap_q,
+                      "gnpQuarter": latest_gnp_q,
+                      "marketScalingBaseMonth": market_base_month,
+                      "historicalPercentile": percentile,
+                      "distanceFromMedianPct": distance_from_median,
+                      "method": (
+                          "Latest official public-equity market value is scaled by the "
+                          "Wilshire proxy's move since that quarter; divided by latest GNP."
+                      ),
+                  },
+              }
+
+          context = {
+              "version": 7,
+              "generatedAt": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+              "normalization": {
+                  "baseMonth": base_month,
+                  "baseValue": 100,
+                  "description": (
+                      "Each line is the Wilshire market level divided by the comparator, "
+                      "then indexed to 100 at the common starting month."
+                  ),
+                  "series": normalization_series,
+              },
+              "buffett": buffett_section,
+              "sources": {
+                  "minimumWage": "U.S. Department of Labor federal minimum-wage history",
+                  "cpi": cpi_source,
+                  "broadCommodities": commodity_source,
+                  "gold": "Alpha Vantage GOLD_SILVER_HISTORY",
+                  "silver": "Alpha Vantage GOLD_SILVER_HISTORY",
+                  "publicEquityMarketValue": "Federal Reserve Z.1 LM883164115.Q via DBnomics",
+                  "gnp": "BEA NIPA table 1.7.5 A001RC-Q via DBnomics",
+              },
+          }
+
+          OUTPUT_FILE.write_text(
+              json.dumps(context, separators=(",", ":")) + "\n",
+              encoding="utf-8",
+          )
+
+          print(
+              f"Wrote {OUTPUT_FILE}: normalization base {base_month}; "
+              f"{len(buffett_section.get('officialRows', []))} Buffett quarters; "
+              f"nowcast {buffett_section.get('nowcast', {}).get('ratio', float('nan')):.1f}%."
+          )
+          PY
+
+      - name: Commit refreshed context
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add market-context.json
+
+          if git diff --cached --quiet; then
+            echo "No market-context changes to commit."
+          else
+            git commit -m "Update market context v7 [skip ci]"
+            git push
+          fi

@@ -134,27 +134,26 @@
       cursor: wait;
     }
 
-    .refresh-content {
+    .refresh-content,
+    .status-loading {
       display: inline-flex;
       align-items: center;
       justify-content: center;
       gap: 9px;
     }
 
-    .spinner {
-      width: 18px;
-      height: 18px;
-      border: 3px solid rgba(255,255,255,.38);
-      border-top-color: #ffffff;
+    .spinner,
+    .status-spinner {
       border-radius: 50%;
       animation: spin .8s linear infinite;
       flex: 0 0 auto;
     }
 
-    .status-loading {
-      display: inline-flex;
-      align-items: center;
-      gap: 9px;
+    .spinner {
+      width: 18px;
+      height: 18px;
+      border: 3px solid rgba(255,255,255,.38);
+      border-top-color: #fff;
     }
 
     .status-spinner {
@@ -162,21 +161,9 @@
       height: 16px;
       border: 2px solid rgba(37,99,235,.22);
       border-top-color: var(--accent);
-      border-radius: 50%;
-      animation: spin .8s linear infinite;
-      flex: 0 0 auto;
     }
 
-    @keyframes spin {
-      to { transform: rotate(360deg); }
-    }
-
-    @media (prefers-reduced-motion: reduce) {
-      .spinner,
-      .status-spinner {
-        animation-duration: 1.8s;
-      }
-    }
+    @keyframes spin { to { transform: rotate(360deg); } }
 
     .status {
       margin-top: 12px;
@@ -276,18 +263,6 @@
     .manual-box.triggered {
       border-left-color: var(--warn);
       background: var(--soft-warn);
-    }
-
-    .chart-head {
-      display: flex;
-      justify-content: space-between;
-      align-items: end;
-      gap: 12px;
-      flex-wrap: wrap;
-    }
-
-    .chart-head .range {
-      width: min(230px, 100%);
     }
 
     .chart-wrap {
@@ -393,37 +368,24 @@
       color: var(--warn);
     }
 
-    .footer-note {
-      margin-top: 14px;
+    .footer-note,
+    details {
       color: var(--muted);
       font-size: 12px;
       line-height: 1.5;
     }
 
-    details {
-      margin-top: 12px;
-      color: var(--muted);
-      font-size: 13px;
-    }
-
-    summary {
-      cursor: pointer;
-      font-weight: 700;
-    }
-
-    code {
-      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-    }
+    details { margin-top: 12px; }
+    summary { cursor: pointer; font-weight: 700; }
   </style>
 </head>
 
 <body>
 <div class="container">
-
   <header>
     <h1>US Market Conditions</h1>
     <p class="subtitle">
-      Wilshire 5000 Total Market Index · long-term moving-average monitor
+      Wilshire 5000 total-market proxy · long-term moving-average monitor
     </p>
   </header>
 
@@ -450,24 +412,23 @@
 
       <div>
         <label>Benchmark</label>
-        <input value="Wilshire 5000 (^W5000)" disabled />
+        <input value="Wilshire 5000 + WFIVX continuation" disabled />
       </div>
     </div>
 
     <button id="refreshButton">Refresh market conditions</button>
 
     <div id="status" class="status">
-      Tap Refresh market conditions to load the Wilshire 5000.
+      Loading the latest published market data…
     </div>
 
     <details>
       <summary>How the page gets its data</summary>
       <p>
-        This is still one HTML file. The page uses the St. Louis Fed's long-history
-        Wilshire 5000 Full Cap Price series through its 2023 discontinuation, then
-        continues with Yahoo Finance's current Wilshire 5000 feed. Browser requests
-        go through public CORS relays. If live sources are unavailable, the page
-        falls back to the most recent successful dataset saved on this iPad.
+        GitHub Actions updates a local <strong>market-data.json</strong> file using
+        archived Wilshire 5000 history plus a current WFIVX continuation from
+        Alpha Vantage. This webpage reads that local file directly, so Safari no
+        longer depends on FRED/Yahoo browser relays.
       </p>
     </details>
   </section>
@@ -477,16 +438,14 @@
       <div class="eyebrow">Normal allocation</div>
       <div class="big-percent" id="autoPercent">--</div>
       <div class="big-amount" id="autoAmount">--</div>
-      <div class="decision-line" id="decisionLine">
-        Waiting for market data.
-      </div>
+      <div class="decision-line" id="decisionLine">Waiting for market data.</div>
     </div>
   </section>
 
   <section class="card">
     <div class="grid-4">
       <div class="metric">
-        <div class="metric-label">Wilshire 5000</div>
+        <div class="metric-label">Market level</div>
         <div class="metric-value" id="currentValue">--</div>
         <div class="metric-sub" id="marketTime">Latest market reading</div>
       </div>
@@ -516,14 +475,11 @@
   </section>
 
   <section class="card">
-    <div class="chart-head">
-      <div>
-        <h2 style="margin-bottom:4px;">Price & monitored averages</h2>
-        <p class="subtitle" style="margin:0;">
-          Calculations use monthly closing observations so every year is weighted consistently. The current market level is included as the latest month.
-        </p>
-      </div>
-    </div>
+    <h2 style="margin-bottom:4px;">Price & monitored averages</h2>
+    <p class="subtitle" style="margin:0;">
+      Moving averages use monthly observations. The latest published market level
+      is included as the current month.
+    </p>
 
     <div id="chartWrap" class="chart-wrap">
       <svg id="chart" viewBox="0 0 1000 560" preserveAspectRatio="none"></svg>
@@ -554,20 +510,17 @@
     <p class="footer-note">
       Rule set: above the 1-year average → 7.5%; at or below the 1-year average → 10%.
       At or below the 5-year average → 15% target, then +5 percentage points for every
-      additional five-year threshold through the 50-year average. Anything beyond the
-      normal 7.5% / 10% amount is shown only for manual review.
+      additional five-year threshold through the 50-year average. Long-term tiers are
+      shown for manual review; only the normal 7.5% / 10% amount is automatic.
     </p>
   </section>
-
 </div>
 
 <script>
 (() => {
   "use strict";
 
-  const SYMBOL = "^W5000";
   const YEARS = [1, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50];
-
   const COLORS = [
     "#111827", "#2563eb", "#087f5b", "#7c3aed", "#b45309", "#be123c",
     "#0f766e", "#9333ea", "#4d7c0f", "#c2410c", "#0369a1", "#6b7280"
@@ -651,234 +604,20 @@
 
   function cacheData(payload) {
     try {
-      localStorage.setItem("wilshire5000CacheV2", JSON.stringify({
+      localStorage.setItem("wilshire5000CacheV3", JSON.stringify({
         savedAt: new Date().toISOString(),
         payload
       }));
-    } catch (err) {
-      console.warn("Could not cache market data", err);
-    }
+    } catch {}
   }
 
   function getCachedData() {
     try {
-      const raw = localStorage.getItem("wilshire5000CacheV2");
-      if (!raw) return null;
-      return JSON.parse(raw);
+      const raw = localStorage.getItem("wilshire5000CacheV3");
+      return raw ? JSON.parse(raw) : null;
     } catch {
       return null;
     }
-  }
-
-  async function fetchText(url, timeoutMs = 12000) {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
-
-    try {
-      const response = await fetch(url, {
-        cache: "no-store",
-        signal: controller.signal
-      });
-
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
-      }
-
-      return await response.text();
-    } finally {
-      clearTimeout(timer);
-    }
-  }
-
-  async function fetchTextThroughRelay(targetUrl) {
-    const relayUrls = [
-      `https://corsproxy.io/?url=${encodeURIComponent(targetUrl)}`,
-      `https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`
-    ];
-
-    const errors = [];
-
-    for (let i = 0; i < relayUrls.length; i++) {
-      try {
-        setLoadingStatus(
-          i === 0
-            ? "Loading long-term Wilshire history…"
-            : "First relay was unavailable — trying backup relay…"
-        );
-
-        return await fetchText(relayUrls[i]);
-      } catch (err) {
-        errors.push(err.name === "AbortError" ? "timeout" : err.message);
-      }
-    }
-
-    throw new Error(`Both browser relays failed: ${errors.join(" | ")}`);
-  }
-
-  async function fetchJsonThroughRelay(targetUrl) {
-    const text = await fetchTextThroughRelay(targetUrl);
-    return JSON.parse(text);
-  }
-
-  async function fetchFredHistory() {
-    const url =
-      "https://fred.stlouisfed.org/graph/fredgraph.csv?id=WILL5000PRFC";
-
-    return fetchTextThroughRelay(url);
-  }
-
-  async function fetchYahoo() {
-    const url =
-      `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(SYMBOL)}` +
-      `?range=max&interval=1mo&includePrePost=false&events=div%2Csplits`;
-
-    return fetchJsonThroughRelay(url);
-  }
-
-  function normalizeFred(csvText) {
-    const lines = csvText
-      .trim()
-      .split(/\r?\n/)
-      .filter(Boolean);
-
-    if (lines.length < 10) {
-      throw new Error("The FRED Wilshire file did not contain enough history.");
-    }
-
-    const rows = [];
-
-    for (let i = 1; i < lines.length; i++) {
-      const parts = lines[i].split(",");
-      if (parts.length < 2) continue;
-
-      const date = parts[0].trim();
-      const value = Number(parts[1].trim());
-
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !Number.isFinite(value)) {
-        continue;
-      }
-
-      rows.push({
-        date,
-        ts: Date.parse(`${date}T00:00:00Z`),
-        value
-      });
-    }
-
-    rows.sort((a, b) => a.ts - b.ts);
-
-    if (rows.length < 300) {
-      throw new Error("The FRED Wilshire history was unexpectedly short.");
-    }
-
-    return rows;
-  }
-
-  function normalizeYahoo(json) {
-    const result = json?.chart?.result?.[0];
-
-    if (!result) {
-      const message = json?.chart?.error?.description || "Yahoo returned no chart data.";
-      throw new Error(message);
-    }
-
-    const timestamps = result.timestamp || [];
-    const closes = result.indicators?.quote?.[0]?.close || [];
-
-    const rows = [];
-
-    for (let i = 0; i < timestamps.length; i++) {
-      const close = Number(closes[i]);
-      if (!Number.isFinite(close)) continue;
-
-      const ts = timestamps[i] * 1000;
-
-      rows.push({
-        ts,
-        date: new Date(ts).toISOString().slice(0, 10),
-        value: close
-      });
-    }
-
-    if (rows.length < 12) {
-      throw new Error("Yahoo returned too little recent Wilshire history.");
-    }
-
-    const metaPrice = Number(result.meta?.regularMarketPrice);
-    const lastClose = rows[rows.length - 1]?.value;
-
-    return {
-      rows,
-      currentPrice: Number.isFinite(metaPrice) ? metaPrice : lastClose,
-      currentTs: Number.isFinite(Number(result.meta?.regularMarketTime))
-        ? Number(result.meta.regularMarketTime) * 1000
-        : rows[rows.length - 1]?.ts,
-      marketTimestamp: Number.isFinite(Number(result.meta?.regularMarketTime))
-        ? new Date(Number(result.meta.regularMarketTime) * 1000).toLocaleString()
-        : rows[rows.length - 1]?.date
-    };
-  }
-
-  function monthKey(ts) {
-    const d = new Date(ts);
-    return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
-  }
-
-  function downsampleMonthly(rows) {
-    const byMonth = new Map();
-
-    rows
-      .slice()
-      .sort((a, b) => a.ts - b.ts)
-      .forEach(row => {
-        byMonth.set(monthKey(row.ts), row);
-      });
-
-    return Array.from(byMonth.values()).sort((a, b) => a.ts - b.ts);
-  }
-
-  function mergeHistory(fredRows, yahooData) {
-    const fredLast = fredRows[fredRows.length - 1];
-    const merged = fredRows.slice();
-
-    /*
-      FRED gives us the long historical series through the legacy index's
-      2023 discontinuation. Yahoo is used only after that date, avoiding
-      sparse/irregular old Yahoo observations.
-    */
-    yahooData.rows.forEach(row => {
-      if (row.ts > fredLast.ts) {
-        merged.push(row);
-      }
-    });
-
-    if (Number.isFinite(yahooData.currentPrice)) {
-      const currentTs = Number.isFinite(yahooData.currentTs)
-        ? yahooData.currentTs
-        : Date.now();
-
-      merged.push({
-        ts: currentTs,
-        date: new Date(currentTs).toISOString().slice(0, 10),
-        value: yahooData.currentPrice
-      });
-    }
-
-    const monthly = downsampleMonthly(merged);
-
-    if (monthly.length < 600) {
-      throw new Error(
-        `Only ${monthly.length} monthly observations were available; 50 years requires at least 600.`
-      );
-    }
-
-    return {
-      rows: monthly,
-      currentPrice: yahooData.currentPrice,
-      marketTimestamp: yahooData.marketTimestamp,
-      firstDate: monthly[0].date,
-      lastDate: monthly[monthly.length - 1].date
-    };
   }
 
   function simpleMovingAverage(values, period) {
@@ -888,13 +627,8 @@
     for (let i = 0; i < values.length; i++) {
       sum += values[i];
 
-      if (i >= period) {
-        sum -= values[i - period];
-      }
-
-      if (i >= period - 1) {
-        out[i] = sum / period;
-      }
+      if (i >= period) sum -= values[i - period];
+      if (i >= period - 1) out[i] = sum / period;
     }
 
     return out;
@@ -906,12 +640,10 @@
     currentAverages = {};
 
     YEARS.forEach(year => {
-      const period = year * 12;
-      const series = simpleMovingAverage(values, period);
+      const series = simpleMovingAverage(values, year * 12);
       moving[year] = series;
 
       let latest = NaN;
-
       for (let i = series.length - 1; i >= 0; i--) {
         if (Number.isFinite(series[i])) {
           latest = series[i];
@@ -987,8 +719,8 @@
 
     $("decisionLine").textContent =
       currentPrice > avg1
-        ? `The Wilshire 5000 is above its 1-year average. Your normal rule calls for ${d.autoPercent}% of this paycheck.`
-        : `The Wilshire 5000 is at or below its 1-year average. Your normal rule calls for ${d.autoPercent}% of this paycheck.`;
+        ? `The market is above its 1-year average. Your normal rule calls for ${d.autoPercent}% of this paycheck.`
+        : `The market is at or below its 1-year average. Your normal rule calls for ${d.autoPercent}% of this paycheck.`;
 
     $("targetValue").textContent = `${d.targetPercent}% / ${money(d.targetAmount)}`;
     $("manualValue").textContent = money(d.manualAdditional);
@@ -1059,20 +791,16 @@
 
     const years = Number(range);
     const cutoff = Date.now() - years * 365.2425 * 24 * 60 * 60 * 1000;
-
     const idx = marketRows.findIndex(r => r.ts >= cutoff);
     return idx >= 0 ? idx : 0;
   }
 
   function sampleIndices(startIndex) {
     const total = marketRows.length - startIndex;
-    const maxPoints = 700;
-    const step = Math.max(1, Math.ceil(total / maxPoints));
-
+    const step = Math.max(1, Math.ceil(total / 700));
     const out = [];
-    for (let i = startIndex; i < marketRows.length; i += step) {
-      out.push(i);
-    }
+
+    for (let i = startIndex; i < marketRows.length; i += step) out.push(i);
 
     if (out[out.length - 1] !== marketRows.length - 1) {
       out.push(marketRows.length - 1);
@@ -1104,14 +832,14 @@
     const startIndex = visibleStartIndex();
     const indices = sampleIndices(startIndex);
 
-    const series = [
-      {
-        label: "Wilshire 5000",
-        color: COLORS[0],
-        width: 2.6,
-        values: marketRows.map(r => r.value)
-      }
-    ];
+    if (!indices.length) return;
+
+    const series = [{
+      label: "Market level",
+      color: COLORS[0],
+      width: 2.6,
+      values: marketRows.map(r => r.value)
+    }];
 
     YEARS.forEach((year, idx) => {
       if ((moving[year] || []).some(Number.isFinite)) {
@@ -1145,17 +873,16 @@
 
     const firstTs = marketRows[indices[0]].ts;
     const lastTs = marketRows[indices[indices.length - 1]].ts;
+
     const xFor = ts => pad.left + ((ts - firstTs) / Math.max(1, lastTs - firstTs)) * plotW;
     const yFor = v => pad.top + (1 - (v - minY) / (maxY - minY)) * plotH;
 
-    const bg = svgEl("rect", {
+    svg.appendChild(svgEl("rect", {
       x: 0, y: 0, width, height, fill: "#ffffff"
-    });
-    svg.appendChild(bg);
+    }));
 
-    const yTicks = 6;
-    for (let t = 0; t <= yTicks; t++) {
-      const frac = t / yTicks;
+    for (let t = 0; t <= 6; t++) {
+      const frac = t / 6;
       const y = pad.top + frac * plotH;
       const value = maxY - frac * (maxY - minY);
 
@@ -1181,9 +908,8 @@
       svg.appendChild(text);
     }
 
-    const xTickCount = 7;
-    for (let t = 0; t <= xTickCount; t++) {
-      const frac = t / xTickCount;
+    for (let t = 0; t <= 7; t++) {
+      const frac = t / 7;
       const ts = firstTs + frac * (lastTs - firstTs);
       const x = pad.left + frac * plotW;
       const d = new Date(ts);
@@ -1191,7 +917,7 @@
       const text = svgEl("text", {
         x,
         y: height - 18,
-        "text-anchor": t === 0 ? "start" : (t === xTickCount ? "end" : "middle"),
+        "text-anchor": t === 0 ? "start" : (t === 7 ? "end" : "middle"),
         fill: "#667085",
         "font-size": 12
       });
@@ -1282,14 +1008,12 @@
 
       const lines = [
         `<strong>${marketRows[best].date}</strong>`,
-        `Wilshire: ${indexNumber(marketRows[best].value)}`
+        `Market: ${indexNumber(marketRows[best].value)}`
       ];
 
       YEARS.forEach(year => {
         const v = moving[year]?.[best];
-        if (Number.isFinite(v)) {
-          lines.push(`${year}y avg: ${indexNumber(v)}`);
-        }
+        if (Number.isFinite(v)) lines.push(`${year}y avg: ${indexNumber(v)}`);
       });
 
       tooltip.innerHTML = lines.join("<br>");
@@ -1314,7 +1038,52 @@
     });
   }
 
-  function applyNormalizedData(data) {
+  function normalizePublishedData(raw) {
+    if (!raw || !Array.isArray(raw.rows)) {
+      throw new Error("market-data.json did not contain a rows array.");
+    }
+
+    const rows = raw.rows
+      .map(r => ({
+        date: String(r.date || ""),
+        ts: Number(r.ts),
+        value: Number(r.value)
+      }))
+      .filter(r =>
+        /^\d{4}-\d{2}-\d{2}$/.test(r.date) &&
+        Number.isFinite(r.ts) &&
+        Number.isFinite(r.value)
+      )
+      .sort((a, b) => a.ts - b.ts);
+
+    if (rows.length < 600) {
+      throw new Error(
+        `Only ${rows.length} monthly observations were published; 50 years requires at least 600.`
+      );
+    }
+
+    const price = Number(raw.currentPrice);
+    if (!Number.isFinite(price)) {
+      throw new Error("The published current market level was missing.");
+    }
+
+    let stamp = raw.marketTimestamp || raw.lastDate || "";
+    try {
+      if (stamp && !Number.isNaN(Date.parse(stamp))) {
+        stamp = new Date(stamp).toLocaleString();
+      }
+    } catch {}
+
+    return {
+      rows,
+      currentPrice: price,
+      marketTimestamp: stamp,
+      firstDate: raw.firstDate || rows[0].date,
+      lastDate: raw.lastDate || rows[rows.length - 1].date
+    };
+  }
+
+  function applyData(data) {
     marketRows = data.rows;
     currentPrice = data.currentPrice;
     marketTimestamp = data.marketTimestamp;
@@ -1324,26 +1093,23 @@
 
   async function refresh() {
     saveSettings();
-
     setRefreshButtonLoading(true);
-    setLoadingStatus("Retrieving long-term Wilshire 5000 history…");
+    setLoadingStatus("Loading the latest published market data…");
 
     try {
-      /*
-        Fetch both sources. FRED provides the 1970-2023 long history.
-        Yahoo provides the current continuation.
-      */
-      const [fredText, yahooRaw] = await Promise.all([
-        fetchFredHistory(),
-        fetchYahoo()
-      ]);
+      const response = await fetch(`market-data.json?v=${Date.now()}`, {
+        cache: "no-store"
+      });
 
-      const fredRows = normalizeFred(fredText);
-      const yahooData = normalizeYahoo(yahooRaw);
-      const normalized = mergeHistory(fredRows, yahooData);
+      if (!response.ok) {
+        throw new Error(`market-data.json returned HTTP ${response.status}.`);
+      }
 
-      applyNormalizedData(normalized);
-      cacheData(normalized);
+      const raw = await response.json();
+      const data = normalizePublishedData(raw);
+
+      applyData(data);
+      cacheData(data);
 
       const yearsOfHistory =
         (marketRows[marketRows.length - 1].ts - marketRows[0].ts) /
@@ -1351,31 +1117,26 @@
 
       setStatus(
         `Updated successfully. ${marketRows.length} monthly observations from ` +
-        `${normalized.firstDate} through ${normalized.lastDate} ` +
+        `${data.firstDate} through ${data.lastDate} ` +
         `(${yearsOfHistory.toFixed(1)} years). Latest market reading: ` +
         `${indexNumber(currentPrice)}.`
       );
     } catch (err) {
-      console.warn(err);
-
       const cached = getCachedData();
 
       if (cached?.payload?.rows?.length) {
-        applyNormalizedData(cached.payload);
+        applyData(cached.payload);
 
         const saved = cached.savedAt
           ? new Date(cached.savedAt).toLocaleString()
           : "an earlier session";
 
         setStatus(
-          `Live refresh failed, so the page is showing its last saved dataset from ${saved}.`,
+          `Published refresh failed, so the page is showing its last saved dataset from ${saved}. ${err.message}`,
           "warn"
         );
       } else {
-        setStatus(
-          `Could not retrieve market data. ${err.message}`,
-          "error"
-        );
+        setStatus(`Could not load market data. ${err.message}`, "error");
       }
     } finally {
       setRefreshButtonLoading(false);
@@ -1399,10 +1160,12 @@
   const cached = getCachedData();
   if (cached?.payload?.rows?.length) {
     try {
-      applyNormalizedData(cached.payload);
-      setStatus("Showing the last saved dataset. Tap Refresh market conditions for a live update.");
+      applyData(cached.payload);
+      setStatus("Showing the last saved dataset while the latest published data loads.");
     } catch {}
   }
+
+  refresh();
 })();
 </script>
 </body>

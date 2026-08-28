@@ -251,6 +251,15 @@
       line-height: 1.35;
     }
 
+    .metric.commitment-ceiling {
+      background: var(--soft-blue);
+      border-color: rgba(37, 99, 235, .28);
+    }
+
+    .commitment-ceiling .metric-value {
+      color: var(--accent);
+    }
+
     .manual-box {
       margin-top: 14px;
       padding: 14px 15px;
@@ -436,10 +445,10 @@
   <header>
     <div class="header-row">
       <h1>US Market Conditions</h1>
-      <span class="version-badge">Version 7</span>
+      <span class="version-badge">Version 8</span>
     </div>
     <p class="subtitle">
-      Market trend · purchasing power · broad-market valuation
+      Market trend · hard-value ratios · financial floor · broad-market valuation
     </p>
   </header>
 
@@ -480,8 +489,8 @@
       <summary>How the page gets its data</summary>
       <p>
         GitHub Actions maintains <strong>market-data.json</strong> for the Wilshire
-        trend monitor and <strong>market-context.json</strong> for purchasing-power
-        comparisons and the Buffett Indicator. The page reads those published files
+        trend monitor and <strong>market-context.json</strong> for raw Wilshire/denominator
+        ratios and the Buffett Indicator. The page reads those published files
         directly, so Safari does not need to contact market-data providers itself.
       </p>
     </details>
@@ -571,20 +580,33 @@
   </section>
 
   <section class="card">
-    <h2 style="margin-bottom:4px;">Purchasing-power normalization</h2>
+    <h2 style="margin-bottom:4px;">Wilshire 5000 ÷ denominator</h2>
     <p class="subtitle" style="margin:0;">
-      Each line divides the market level by another measure of purchasing power,
-      then indexes the result to 100 at one common starting month.
+      Raw relative-value ratios. Nothing is rebased to 100: each reading is simply
+      the Wilshire 5000 proxy level divided by the denominator's dollar/unit value.
     </p>
 
     <div id="contextStatus" class="status">
-      Loading purchasing-power and valuation context…
+      Loading hard-value ratios and valuation context…
     </div>
 
     <div class="explain-box" id="normalizationExplanation">
-      A reading above 100 means stocks have gained value relative to that comparator
-      since the common starting point. Below 100 means the comparator has gained
-      relative value versus stocks.
+      Example: Wilshire ÷ gold means the Wilshire index level divided by dollars per
+      ounce of gold. A rising ratio means stocks are rising relative to gold; a falling
+      ratio means gold is rising relative to stocks. The same logic applies to minimum
+      wage, silver, and oil.
+    </div>
+
+    <div class="explain-box">
+      <strong>Hard-value basket:</strong> minimum wage, gold, silver, and oil each carry
+      a 25% weight. Because those four raw ratios use different units, the basket alone
+      is indexed to <strong>100 in April 1985</strong>. The four individual series remain
+      raw Wilshire ÷ denominator ratios.
+    </div>
+
+    <div style="margin-top:14px; max-width:360px;">
+      <label for="ratioSeriesSelect">Chart series</label>
+      <select id="ratioSeriesSelect"></select>
     </div>
 
     <div id="normalizationChartWrap" class="chart-wrap context-chart">
@@ -598,10 +620,10 @@
       <table class="context-table">
         <thead>
           <tr>
-            <th>Comparator</th>
-            <th>Normalized</th>
-            <th>Vs. baseline</th>
-            <th>Latest comparator data</th>
+            <th>Denominator</th>
+            <th>Wilshire ÷ denominator</th>
+            <th>Denominator value</th>
+            <th>Latest denominator data</th>
           </tr>
         </thead>
         <tbody id="normalizationBody"></tbody>
@@ -611,6 +633,50 @@
     <p class="footer-note" id="normalizationNote">
       Waiting for market-context data.
     </p>
+  </section>
+
+  <section class="card">
+    <h2 style="margin-bottom:4px;">Maximum financial commitment</h2>
+    <p class="subtitle" style="margin:0;">
+      A conservative monthly ceiling based on the lowest of three income floors:
+      federal minimum wage × 160 hours, state minimum wage × 160 hours, and the
+      state's maximum base unemployment benefit converted to a monthly equivalent.
+    </p>
+
+    <div style="margin-top:14px; max-width:420px;">
+      <label for="residencyState">State of residence</label>
+      <select id="residencyState"></select>
+    </div>
+
+    <div class="grid-4" style="margin-top:14px;">
+      <div class="metric">
+        <div class="metric-label">Federal minimum wage × 160</div>
+        <div class="metric-value" id="federalCommitment">--</div>
+        <div class="metric-sub" id="federalCommitmentSub">$7.25/hour</div>
+      </div>
+
+      <div class="metric">
+        <div class="metric-label">State minimum wage × 160</div>
+        <div class="metric-value" id="stateCommitment">--</div>
+        <div class="metric-sub" id="stateCommitmentSub">State planning rate</div>
+      </div>
+
+      <div class="metric">
+        <div class="metric-label">Unemployment benefit / month</div>
+        <div class="metric-value" id="unemploymentCommitment">--</div>
+        <div class="metric-sub" id="unemploymentCommitmentSub">Maximum base weekly benefit × 52 ÷ 12</div>
+      </div>
+
+      <div class="metric commitment-ceiling">
+        <div class="metric-label">Commitment ceiling</div>
+        <div class="metric-value" id="commitmentCeiling">--</div>
+        <div class="metric-sub" id="commitmentCeilingSub">Lowest of the three monthly floors</div>
+      </div>
+    </div>
+
+    <div class="explain-box" id="commitmentNote">
+      Select a state to calculate the planning floor. Florida is the default.
+    </div>
   </section>
 
   <section class="card">
@@ -682,6 +748,61 @@
 
   const CONTEXT_COLORS = ["#2563eb", "#b45309", "#7c3aed", "#087f5b", "#be123c"];
 
+  const FEDERAL_MIN_WAGE = 7.25;
+  const STATE_FINANCIAL_FLOORS = {
+    AL: { name: "Alabama", stateRate: 7.25, uiWeekly: 275, note: "No state minimum-wage law; federal rate used as the planning floor." },
+    AK: { name: "Alaska", stateRate: 14.00, uiWeekly: 370, note: "" },
+    AZ: { name: "Arizona", stateRate: 15.15, uiWeekly: 320, note: "" },
+    AR: { name: "Arkansas", stateRate: 11.00, uiWeekly: 451, note: "" },
+    CA: { name: "California", stateRate: 16.90, uiWeekly: 450, note: "" },
+    CO: { name: "Colorado", stateRate: 15.16, uiWeekly: 767, note: "" },
+    CT: { name: "Connecticut", stateRate: 16.94, uiWeekly: 721, note: "" },
+    DE: { name: "Delaware", stateRate: 15.00, uiWeekly: 450, note: "" },
+    DC: { name: "District of Columbia", stateRate: 18.40, uiWeekly: 444, note: "" },
+    FL: { name: "Florida", stateRate: 14.00, uiWeekly: 275, futureRate: 15.00, futureDate: "2026-09-30", note: "Florida is $14.00/hour through September 29, 2026; the scheduled rate is $15.00 beginning September 30, 2026." },
+    GA: { name: "Georgia", stateRate: 7.25, uiWeekly: 365, note: "Georgia state law lists a lower rate for some employment; federal $7.25 is used as the effective planning floor for FLSA-covered work." },
+    HI: { name: "Hawaii", stateRate: 16.00, uiWeekly: 868, note: "" },
+    ID: { name: "Idaho", stateRate: 7.25, uiWeekly: 624, note: "" },
+    IL: { name: "Illinois", stateRate: 15.00, uiWeekly: 628, note: "" },
+    IN: { name: "Indiana", stateRate: 7.25, uiWeekly: 390, note: "" },
+    IA: { name: "Iowa", stateRate: 7.25, uiWeekly: 622, note: "" },
+    KS: { name: "Kansas", stateRate: 7.25, uiWeekly: 637, note: "" },
+    KY: { name: "Kentucky", stateRate: 7.25, uiWeekly: 720, note: "" },
+    LA: { name: "Louisiana", stateRate: 7.25, uiWeekly: 282, note: "No state minimum-wage law; federal rate used as the planning floor." },
+    ME: { name: "Maine", stateRate: 15.10, uiWeekly: 623, note: "" },
+    MD: { name: "Maryland", stateRate: 15.00, uiWeekly: 430, note: "" },
+    MA: { name: "Massachusetts", stateRate: 15.00, uiWeekly: 1105, note: "" },
+    MI: { name: "Michigan", stateRate: 13.73, uiWeekly: 530, note: "" },
+    MN: { name: "Minnesota", stateRate: 11.41, uiWeekly: 611, note: "" },
+    MS: { name: "Mississippi", stateRate: 7.25, uiWeekly: 235, note: "No state minimum-wage law; federal rate used as the planning floor." },
+    MO: { name: "Missouri", stateRate: 15.00, uiWeekly: 320, note: "" },
+    MT: { name: "Montana", stateRate: 10.85, uiWeekly: 767, note: "" },
+    NE: { name: "Nebraska", stateRate: 15.00, uiWeekly: 582, note: "" },
+    NV: { name: "Nevada", stateRate: 12.00, uiWeekly: 631, note: "" },
+    NH: { name: "New Hampshire", stateRate: 7.25, uiWeekly: 427, note: "" },
+    NJ: { name: "New Jersey", stateRate: 15.23, uiWeekly: 905, note: "New Jersey has employer/category-specific rates; the lower listed adult rate is used conservatively for this planning calculation." },
+    NM: { name: "New Mexico", stateRate: 12.00, uiWeekly: 624, note: "" },
+    NY: { name: "New York", stateRate: 16.00, uiWeekly: 869, note: "New York varies by region; the lower statewide listed rate is used conservatively." },
+    NC: { name: "North Carolina", stateRate: 7.25, uiWeekly: 350, note: "" },
+    ND: { name: "North Dakota", stateRate: 7.25, uiWeekly: 815, note: "" },
+    OH: { name: "Ohio", stateRate: 7.25, uiWeekly: 624, note: "Ohio has employer-size/coverage differences; $7.25 is used as the conservative planning floor." },
+    OK: { name: "Oklahoma", stateRate: 7.25, uiWeekly: 649, note: "" },
+    OR: { name: "Oregon", stateRate: 14.55, uiWeekly: 872, note: "Oregon varies by region; the nonurban rate is used as the conservative planning floor." },
+    PA: { name: "Pennsylvania", stateRate: 7.25, uiWeekly: 605, note: "" },
+    RI: { name: "Rhode Island", stateRate: 16.00, uiWeekly: 745, note: "" },
+    SC: { name: "South Carolina", stateRate: 7.25, uiWeekly: 350, note: "No state minimum-wage law; federal rate used as the planning floor." },
+    SD: { name: "South Dakota", stateRate: 11.85, uiWeekly: 553, note: "" },
+    TN: { name: "Tennessee", stateRate: 7.25, uiWeekly: 325, note: "No state minimum-wage law; federal rate used as the planning floor." },
+    TX: { name: "Texas", stateRate: 7.25, uiWeekly: 605, note: "" },
+    UT: { name: "Utah", stateRate: 7.25, uiWeekly: 806, note: "" },
+    VT: { name: "Vermont", stateRate: 14.42, uiWeekly: 757, note: "" },
+    VA: { name: "Virginia", stateRate: 12.77, uiWeekly: 430, note: "" },
+    WA: { name: "Washington", stateRate: 17.13, uiWeekly: 1152, note: "" },
+    WV: { name: "West Virginia", stateRate: 8.75, uiWeekly: 662, note: "" },
+    WI: { name: "Wisconsin", stateRate: 7.25, uiWeekly: 370, note: "" },
+    WY: { name: "Wyoming", stateRate: 7.25, uiWeekly: 651, note: "Wyoming state law lists a lower rate for some employment; federal $7.25 is used as the effective planning floor for FLSA-covered work." },
+  };
+
   const $ = id => document.getElementById(id);
 
   function money(value) {
@@ -738,7 +859,8 @@
   function saveSettings() {
     localStorage.setItem("marketConditionsSettings", JSON.stringify({
       paycheck: $("paycheck").value,
-      chartRange: $("chartRange").value
+      chartRange: $("chartRange").value,
+      residencyState: $("residencyState")?.value || "FL"
     }));
   }
 
@@ -749,7 +871,80 @@
       const s = JSON.parse(raw);
       if (s.paycheck != null) $("paycheck").value = s.paycheck;
       if (s.chartRange) $("chartRange").value = s.chartRange;
+      if (s.residencyState && STATE_FINANCIAL_FLOORS[s.residencyState]) {
+        $("residencyState").value = s.residencyState;
+      }
     } catch {}
+  }
+
+  function initializeResidencySelector() {
+    const select = $("residencyState");
+    if (!select) return;
+    select.innerHTML = "";
+
+    Object.entries(STATE_FINANCIAL_FLOORS)
+      .sort((a, b) => a[1].name.localeCompare(b[1].name))
+      .forEach(([abbr, info]) => {
+        const option = document.createElement("option");
+        option.value = abbr;
+        option.textContent = info.name;
+        select.appendChild(option);
+      });
+
+    select.value = "FL";
+  }
+
+  function localDateKey() {
+    const now = new Date();
+    const y = now.getFullYear();
+    const m = String(now.getMonth() + 1).padStart(2, "0");
+    const d = String(now.getDate()).padStart(2, "0");
+    return `${y}-${m}-${d}`;
+  }
+
+  function statePlanningRate(info) {
+    if (info?.futureRate && info?.futureDate && localDateKey() >= info.futureDate) {
+      return Number(info.futureRate);
+    }
+    return Number(info?.stateRate);
+  }
+
+  function renderFinancialCommitment() {
+    const select = $("residencyState");
+    if (!select) return;
+
+    const abbr = STATE_FINANCIAL_FLOORS[select.value] ? select.value : "FL";
+    const info = STATE_FINANCIAL_FLOORS[abbr];
+    const stateRate = statePlanningRate(info);
+    const federalMonthly = FEDERAL_MIN_WAGE * 160;
+    const stateMonthly = stateRate * 160;
+    const unemploymentMonthly = Number(info.uiWeekly) * 52 / 12;
+    const ceiling = Math.min(federalMonthly, stateMonthly, unemploymentMonthly);
+
+    $("federalCommitment").textContent = money(federalMonthly);
+    $("federalCommitmentSub").textContent = `${money(FEDERAL_MIN_WAGE)}/hour × 160`;
+
+    $("stateCommitment").textContent = money(stateMonthly);
+    $("stateCommitmentSub").textContent = `${info.name}: ${money(stateRate)}/hour × 160`;
+
+    $("unemploymentCommitment").textContent = money(unemploymentMonthly);
+    $("unemploymentCommitmentSub").textContent =
+      `${money(Number(info.uiWeekly))}/week max × 52 ÷ 12`;
+
+    $("commitmentCeiling").textContent = money(ceiling);
+
+    let sourceName = "Federal minimum wage";
+    if (Math.abs(ceiling - stateMonthly) < 0.005) sourceName = `${info.name} minimum wage`;
+    if (Math.abs(ceiling - unemploymentMonthly) < 0.005) sourceName = `${info.name} unemployment benefit`;
+    $("commitmentCeilingSub").textContent = `Lowest floor: ${sourceName}`;
+
+    const rateNote = info.note ? ` ${info.note}` : "";
+    $("commitmentNote").innerHTML =
+      `<strong>Planning rule:</strong> keep unavoidable monthly financial commitments at or below ` +
+      `<strong>${money(ceiling)}</strong> for ${info.name}, using the lowest of the three floors. ` +
+      `State wage data are based on U.S. Department of Labor rates effective July 1, 2026. ` +
+      `Unemployment uses the 2026 maximum base weekly benefit; actual eligibility and benefits may be lower.` +
+      rateNote;
   }
 
   function cacheData(payload) {
@@ -1242,19 +1437,21 @@
   }
 
   function normalizeContextData(raw) {
-    if (!raw || !raw.normalization || !raw.buffett) {
-      throw new Error("market-context.json is missing required sections.");
+    if (!raw || !raw.ratios || !raw.buffett) {
+      throw new Error("market-context.json is missing Version 8 ratio data.");
     }
 
-    const series = Array.isArray(raw.normalization.series)
-      ? raw.normalization.series.map((s, idx) => ({
+    const series = Array.isArray(raw.ratios.series)
+      ? raw.ratios.series.map((s, idx) => ({
           ...s,
           color: CONTEXT_COLORS[idx % CONTEXT_COLORS.length],
           rows: (s.rows || [])
             .map(r => ({
               date: String(r.date || ""),
               ts: Number(r.ts),
-              value: Number(r.value)
+              value: Number(r.value),
+              marketValue: Number(r.marketValue),
+              comparatorValue: Number(r.comparatorValue)
             }))
             .filter(r =>
               Number.isFinite(r.ts) &&
@@ -1266,8 +1463,29 @@
       : [];
 
     if (!series.length) {
-      throw new Error("No purchasing-power series were published.");
+      throw new Error("No raw Wilshire/denominator ratio series were published.");
     }
+
+    const rawBasket = raw.ratios.basket || null;
+    const basket = rawBasket
+      ? {
+          ...rawBasket,
+          color: "#111827",
+          rows: (rawBasket.rows || [])
+            .map(r => ({
+              ...r,
+              date: String(r.date || ""),
+              ts: Number(r.ts),
+              value: Number(r.value)
+            }))
+            .filter(r =>
+              Number.isFinite(r.ts) &&
+              Number.isFinite(r.value) &&
+              /^\d{4}-\d{2}-\d{2}$/.test(r.date)
+            )
+            .sort((a, b) => a.ts - b.ts)
+        }
+      : null;
 
     const officialRows = (raw.buffett.officialRows || [])
       .map(r => ({
@@ -1284,9 +1502,10 @@
 
     return {
       ...raw,
-      normalization: {
-        ...raw.normalization,
-        series
+      ratios: {
+        ...raw.ratios,
+        series,
+        basket
       },
       buffett: {
         ...raw.buffett,
@@ -1302,90 +1521,142 @@
 
   function renderContext() {
     if (!marketContext) return;
-    renderNormalizationTable();
-    renderNormalizationChart();
+    renderRatioTable();
+    renderRatioChart();
     renderBuffettIndicator();
   }
 
-  function renderNormalizationTable() {
+  function ratioLabel(series) {
+    return series.shortLabel || series.label || series.key;
+  }
+
+  function formatComparatorValue(series, value) {
+    if (!Number.isFinite(value)) return "--";
+    const unit = String(series.comparatorUnit || "").toLowerCase();
+    if (unit.includes("dollar")) return money(value);
+    return indexNumber(value);
+  }
+
+  function ensureRatioSelector() {
+    const select = $("ratioSeriesSelect");
+    if (!select || !marketContext) return null;
+
+    const series = marketContext.ratios.series;
+    const basket = marketContext.ratios.basket;
+    const prior = select.value;
+    select.innerHTML = "";
+
+    series.forEach(s => {
+      const option = document.createElement("option");
+      option.value = s.key;
+      option.textContent = `Wilshire ÷ ${ratioLabel(s)}`;
+      select.appendChild(option);
+    });
+
+    if (basket?.rows?.length) {
+      const option = document.createElement("option");
+      option.value = basket.key || "hardValueBasket";
+      option.textContent = "Hard-value basket (Apr 1985 = 100)";
+      select.appendChild(option);
+    }
+
+    const keys = series.map(s => s.key);
+    if (basket?.rows?.length) keys.push(basket.key || "hardValueBasket");
+
+    if (prior && keys.includes(prior)) {
+      select.value = prior;
+    } else if (keys.includes("minimumWage")) {
+      select.value = "minimumWage";
+    } else {
+      select.value = keys[0] || "";
+    }
+
+    return select.value;
+  }
+
+  function renderRatioTable() {
     const body = $("normalizationBody");
     if (!body || !marketContext) return;
 
+    ensureRatioSelector();
     body.innerHTML = "";
 
-    marketContext.normalization.series.forEach(series => {
+    marketContext.ratios.series.forEach(series => {
       const latest = series.rows[series.rows.length - 1];
-      const delta = latest ? latest.value - 100 : NaN;
-
       const tr = document.createElement("tr");
       tr.innerHTML = `
-        <td>${series.shortLabel || series.label}</td>
+        <td>${ratioLabel(series)}</td>
         <td>${latest ? indexNumber(latest.value) : "--"}</td>
-        <td>${Number.isFinite(delta) ? `${delta >= 0 ? "+" : ""}${delta.toFixed(1)}%` : "--"}</td>
+        <td>${latest ? formatComparatorValue(series, latest.comparatorValue) : "--"}</td>
         <td>${series.latestComparatorDate || "--"}</td>
       `;
       body.appendChild(tr);
     });
 
-    const base = marketContext.normalization.baseMonth || "--";
+    const basket = marketContext.ratios.basket;
+    if (basket?.rows?.length) {
+      const latest = basket.rows[basket.rows.length - 1];
+      const tr = document.createElement("tr");
+      tr.innerHTML = `
+        <td><strong>Hard-value basket</strong></td>
+        <td><strong>${indexNumber(latest.value)}</strong></td>
+        <td>25% each</td>
+        <td>Apr 1985 = 100</td>
+      `;
+      body.appendChild(tr);
+    }
+
     $("normalizationNote").textContent =
-      `Common baseline: ${base} = 100 for every line. ` +
-      `This is a relative-value comparison, not a claim that any one comparator is a perfect inflation hedge.`;
+      "The four individual readings are raw Wilshire ÷ denominator ratios. " +
+      "Only the equal-weight hard-value basket is indexed, with April 1985 = 100.";
   }
 
-  function renderNormalizationChart() {
+  function renderRatioChart() {
     if (!marketContext) return;
 
     const svg = $("normalizationChart");
     const legend = $("normalizationLegend");
     const tooltip = $("normalizationTooltip");
-    if (!svg || !legend || !tooltip) return;
+    const select = $("ratioSeriesSelect");
+    if (!svg || !legend || !tooltip || !select) return;
+
+    const selectedKey = ensureRatioSelector();
+    const basket = marketContext.ratios.basket;
+    const isBasket = Boolean(basket?.rows?.length && selectedKey === (basket.key || "hardValueBasket"));
+    const series = isBasket
+      ? basket
+      : (marketContext.ratios.series.find(s => s.key === selectedKey)
+        || marketContext.ratios.series[0]);
+    if (!series || !series.rows.length) return;
 
     svg.innerHTML = "";
     legend.innerHTML = "";
 
     const width = 1000;
     const height = 470;
-    const pad = { left: 70, right: 22, top: 25, bottom: 44 };
+    const pad = { left: 86, right: 22, top: 25, bottom: 44 };
     const plotW = width - pad.left - pad.right;
     const plotH = height - pad.top - pad.bottom;
 
-    const allSeries = marketContext.normalization.series;
-    const latestTs = Math.max(
-      ...allSeries.map(s => s.rows.length ? s.rows[s.rows.length - 1].ts : 0)
-    );
+    const latestTs = series.rows[series.rows.length - 1].ts;
     const startTs = rangeStartTs(latestTs);
+    const visibleRows = series.rows.filter(r => r.ts >= startTs);
+    if (!visibleRows.length) return;
 
-    const visible = allSeries.map(s => ({
-      ...s,
-      visibleRows: s.rows.filter(r => r.ts >= startTs)
-    })).filter(s => s.visibleRows.length);
-
-    if (!visible.length) return;
-
-    let firstTs = Infinity;
-    let lastTs = -Infinity;
-    let minY = 100;
-    let maxY = 100;
-
-    visible.forEach(s => {
-      firstTs = Math.min(firstTs, s.visibleRows[0].ts);
-      lastTs = Math.max(lastTs, s.visibleRows[s.visibleRows.length - 1].ts);
-      s.visibleRows.forEach(r => {
-        minY = Math.min(minY, r.value);
-        maxY = Math.max(maxY, r.value);
-      });
-    });
+    const firstTs = visibleRows[0].ts;
+    const lastTs = visibleRows[visibleRows.length - 1].ts;
+    let minY = Math.min(...visibleRows.map(r => r.value));
+    let maxY = Math.max(...visibleRows.map(r => r.value));
 
     let spread = maxY - minY;
-    if (!Number.isFinite(spread) || spread <= 0) spread = 1;
-    minY -= spread * 0.06;
-    maxY += spread * 0.06;
+    if (!Number.isFinite(spread) || spread <= 0) spread = Math.max(1, maxY * 0.1);
+    minY = Math.max(0, minY - spread * 0.08);
+    maxY += spread * 0.08;
 
     const xFor = ts =>
       pad.left + ((ts - firstTs) / Math.max(1, lastTs - firstTs)) * plotW;
     const yFor = value =>
-      pad.top + (1 - (value - minY) / (maxY - minY)) * plotH;
+      pad.top + (1 - (value - minY) / Math.max(1e-12, maxY - minY)) * plotH;
 
     svg.appendChild(svgEl("rect", {
       x: 0, y: 0, width, height, fill: "#ffffff"
@@ -1413,16 +1684,6 @@
       svg.appendChild(label);
     }
 
-    if (100 >= minY && 100 <= maxY) {
-      const y100 = yFor(100);
-      svg.appendChild(svgEl("line", {
-        x1: pad.left, x2: width - pad.right,
-        y1: y100, y2: y100,
-        stroke: "#98a2b3", "stroke-width": 1.2,
-        "stroke-dasharray": "6 5"
-      }));
-    }
-
     for (let t = 0; t <= 7; t++) {
       const frac = t / 7;
       const ts = firstTs + frac * (lastTs - firstTs);
@@ -1440,43 +1701,33 @@
       svg.appendChild(label);
     }
 
-    visible.forEach(series => {
-      let path = "";
-      let penDown = false;
-      const step = Math.max(1, Math.ceil(series.visibleRows.length / 700));
+    let path = "";
+    const step = Math.max(1, Math.ceil(visibleRows.length / 900));
+    for (let i = 0; i < visibleRows.length; i += step) {
+      const row = visibleRows[i];
+      path += `${path ? "L" : "M"}${xFor(row.ts).toFixed(2)},${yFor(row.value).toFixed(2)} `;
+    }
+    const lastRow = visibleRows[visibleRows.length - 1];
+    if (lastRow && visibleRows.length > 1) {
+      path += `L${xFor(lastRow.ts).toFixed(2)},${yFor(lastRow.value).toFixed(2)} `;
+    }
 
-      for (let i = 0; i < series.visibleRows.length; i += step) {
-        const row = series.visibleRows[i];
-        const x = xFor(row.ts);
-        const y = yFor(row.value);
-        path += `${penDown ? "L" : "M"}${x.toFixed(2)},${y.toFixed(2)} `;
-        penDown = true;
-      }
+    svg.appendChild(svgEl("path", {
+      d: path,
+      fill: "none",
+      stroke: series.color,
+      "stroke-width": 2.2,
+      "vector-effect": "non-scaling-stroke",
+      "stroke-linejoin": "round",
+      "stroke-linecap": "round"
+    }));
 
-      const lastRow = series.visibleRows[series.visibleRows.length - 1];
-      if (lastRow && series.visibleRows.length > 1) {
-        const x = xFor(lastRow.ts);
-        const y = yFor(lastRow.value);
-        path += `L${x.toFixed(2)},${y.toFixed(2)} `;
-      }
-
-      svg.appendChild(svgEl("path", {
-        d: path,
-        fill: "none",
-        stroke: series.color,
-        "stroke-width": 2,
-        "vector-effect": "non-scaling-stroke",
-        "stroke-linejoin": "round",
-        "stroke-linecap": "round"
-      }));
-
-      const item = document.createElement("div");
-      item.className = "legend-item";
-      item.innerHTML =
-        `<span class="swatch" style="background:${series.color}"></span>` +
-        `<span>${series.shortLabel || series.label}</span>`;
-      legend.appendChild(item);
-    });
+    const item = document.createElement("div");
+    item.className = "legend-item";
+    item.innerHTML =
+      `<span class="swatch" style="background:${series.color}"></span>` +
+      `<span>${isBasket ? "Hard-value basket (Apr 1985 = 100)" : `Wilshire 5000 ÷ ${ratioLabel(series)}`}</span>`;
+    legend.appendChild(item);
 
     const hoverLine = svgEl("line", {
       x1: 0, x2: 0,
@@ -1490,16 +1741,16 @@
     svg.appendChild(hoverLine);
 
     function nearestRow(rows, targetTs) {
-      let best = rows[0];
-      let bestDist = Math.abs(best.ts - targetTs);
-      for (const row of rows) {
-        const dist = Math.abs(row.ts - targetTs);
-        if (dist < bestDist) {
-          best = row;
-          bestDist = dist;
-        }
+      let lo = 0;
+      let hi = rows.length - 1;
+      while (lo < hi) {
+        const mid = Math.floor((lo + hi) / 2);
+        if (rows[mid].ts < targetTs) lo = mid + 1;
+        else hi = mid;
       }
-      return best;
+      const a = rows[lo];
+      const b = lo > 0 ? rows[lo - 1] : a;
+      return Math.abs(a.ts - targetTs) < Math.abs(b.ts - targetTs) ? a : b;
     }
 
     function onPointer(evt) {
@@ -1514,31 +1765,32 @@
 
       const frac = (localX - pad.left) / plotW;
       const targetTs = firstTs + frac * (lastTs - firstTs);
-      const anchorRow = nearestRow(visible[0].visibleRows, targetTs);
-      const x = xFor(anchorRow.ts);
+      const row = nearestRow(visibleRows, targetTs);
+      const x = xFor(row.ts);
 
       hoverLine.setAttribute("x1", x);
       hoverLine.setAttribute("x2", x);
       hoverLine.setAttribute("visibility", "visible");
 
-      const lines = [`<strong>${anchorRow.date}</strong>`];
-      visible.forEach(series => {
-        const row = nearestRow(series.visibleRows, anchorRow.ts);
-        lines.push(
-          `${series.shortLabel || series.label}: ${indexNumber(row.value)}`
-        );
-      });
-
-      tooltip.innerHTML = lines.join("<br>");
+      if (isBasket) {
+        tooltip.innerHTML =
+          `<strong>${row.date}</strong><br>` +
+          `Hard-value basket: ${indexNumber(row.value)}<br>` +
+          `April 1985 baseline: 100`;
+      } else {
+        tooltip.innerHTML =
+          `<strong>${row.date}</strong><br>` +
+          `Wilshire ÷ ${ratioLabel(series)}: ${indexNumber(row.value)}<br>` +
+          `Wilshire level: ${indexNumber(row.marketValue)}<br>` +
+          `${ratioLabel(series)}: ${formatComparatorValue(series, row.comparatorValue)}`;
+      }
       tooltip.style.display = "block";
 
       const wrap = $("normalizationChartWrap").getBoundingClientRect();
       let left = evt.clientX - wrap.left + 14;
       let top = evt.clientY - wrap.top + 14;
-
-      if (left + 250 > wrap.width) left -= 264;
-      if (top + 210 > wrap.height) top -= 220;
-
+      if (left + 270 > wrap.width) left -= 284;
+      if (top + 170 > wrap.height) top -= 180;
       tooltip.style.left = `${Math.max(8, left)}px`;
       tooltip.style.top = `${Math.max(8, top)}px`;
     }
@@ -1749,7 +2001,7 @@
   }
 
   async function refreshContext() {
-    setContextLoading("Loading purchasing-power and Buffett context…");
+    setContextLoading("Loading Wilshire/denominator ratios and Buffett context…");
 
     try {
       const response = await fetch(`market-context.json?v=${Date.now()}`, {
@@ -1766,14 +2018,13 @@
       applyContextData(data);
       cacheContextData(data);
 
-      const base = data.normalization.baseMonth || "--";
       setContextStatus(
-        `Context updated successfully. Common purchasing-power baseline: ${base} = 100.`
+        `Context updated successfully. Raw Wilshire/denominator ratios loaded.`
       );
     } catch (err) {
       const cached = getCachedContextData();
 
-      if (cached?.payload?.normalization?.series?.length) {
+      if (cached?.payload?.ratios?.series?.length) {
         try {
           const data = normalizeContextData(cached.payload);
           applyContextData(data);
@@ -1791,7 +2042,7 @@
       }
 
       setContextStatus(
-        `Purchasing-power / Buffett context is not available yet. ${err.message}`,
+        `Ratio / Buffett context is not available yet. ${err.message}`,
         "warn"
       );
     }
@@ -1912,13 +2163,24 @@
     if (marketRows.length) renderDashboard();
   });
 
+  $("ratioSeriesSelect").addEventListener("change", () => {
+    if (marketContext) renderRatioChart();
+  });
+
+  $("residencyState").addEventListener("change", () => {
+    saveSettings();
+    renderFinancialCommitment();
+  });
+
   $("chartRange").addEventListener("change", () => {
     saveSettings();
     if (marketRows.length) renderChart();
     if (marketContext) renderContext();
   });
 
+  initializeResidencySelector();
   loadSettings();
+  renderFinancialCommitment();
 
   const cached = getCachedData();
   if (cached?.payload?.rows?.length) {
@@ -1929,11 +2191,11 @@
   }
 
   const cachedContext = getCachedContextData();
-  if (cachedContext?.payload?.normalization?.series?.length) {
+  if (cachedContext?.payload?.ratios?.series?.length) {
     try {
       applyContextData(normalizeContextData(cachedContext.payload));
       setContextStatus(
-        "Showing the last saved purchasing-power / valuation context while the latest data loads."
+        "Showing the last saved ratio / valuation context while the latest data loads."
       );
     } catch {}
   }
